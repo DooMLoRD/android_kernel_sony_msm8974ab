@@ -1225,7 +1225,7 @@ static ssize_t store_pad_set(struct device *dev,
 		return err;
 
 	if (val != ad7146->pad_enable_state) {
-		cancel_delayed_work_sync(&ad7146->work);
+		cancel_delayed_work(&ad7146->work);
 		if (!ad7146->pad_enable_state) {
 			mutex_lock(&ad7146->mutex);
 			ad7146_setup_defaults(ad7146);
@@ -1375,6 +1375,7 @@ static void switch_set_work(struct work_struct *work)
 	unsigned short sw_data = STGX_ALL_OFF;
 	unsigned short prev_sw_data = ad7146->sw_updata;
 	unsigned short data;
+	unsigned short pwr_data;
 	static unsigned short sv_data_point[PAD_NUM_MAX];
 	static unsigned short stg_data[PAD_NUM_MAX];
 	static unsigned short stg_h_threshold[PAD_NUM_MAX];
@@ -1532,7 +1533,9 @@ static void switch_set_work(struct work_struct *work)
 	}
 
 	/* set scheduller */
-	if (tm_val)
+	ad7146->read(ad7146->dev, shadow_reg[PWR_CONTROL].addr, &pwr_data);
+	if (tm_val && !ad7146->i2c_err_flag &&
+		((pwr_data & PWR_MODE_SHUTDOWN) != PWR_MODE_SHUTDOWN))
 		schedule_delayed_work(&ad7146->work, msecs_to_jiffies(tm_val));
 }
 
@@ -1541,6 +1544,7 @@ static irqreturn_t ad7146_isr(int irq, void *handle)
 
 	struct ad7146_chip *ad7146 = handle;
 	int cnt, index, tm_val;
+	unsigned short pwr_data;
 	static unsigned short stg_data[PAD_NUM_MAX];
 	static unsigned short stg_h_threshold[PAD_NUM_MAX];
 	static unsigned short stg_l_threshold[PAD_NUM_MAX];
@@ -1548,7 +1552,7 @@ static irqreturn_t ad7146_isr(int irq, void *handle)
 	if (!ad7146->pad_enable_state)
 		return IRQ_HANDLED;
 
-	cancel_delayed_work_sync(&ad7146->work);
+	cancel_delayed_work(&ad7146->work);
 
 	mutex_lock(&ad7146->mutex);
 	/* get int-status */
@@ -1597,7 +1601,10 @@ static irqreturn_t ad7146_isr(int irq, void *handle)
 	mutex_unlock(&ad7146->mutex);
 
 	/* set scheduller */
-	schedule_delayed_work(&ad7146->work, msecs_to_jiffies(tm_val));
+	ad7146->read(ad7146->dev, shadow_reg[PWR_CONTROL].addr, &pwr_data);
+	if (!ad7146->i2c_err_flag &&
+		((pwr_data & PWR_MODE_SHUTDOWN) != PWR_MODE_SHUTDOWN))
+		schedule_delayed_work(&ad7146->work, msecs_to_jiffies(tm_val));
 	return IRQ_HANDLED;
 }
 
@@ -1962,7 +1969,7 @@ err_out:
 void ad7146_remove(struct ad7146_chip *ad7146)
 {
 	free_irq(ad7146->irq, ad7146);
-	cancel_delayed_work_sync(&ad7146->work);
+	cancel_delayed_work(&ad7146->work);
 	cancel_work_sync(&ad7146->calib_work);
 	ad7146_sysfs_remove(ad7146->dev);
 	switch_dev_unregister(&ad7146->sw_stg1);
@@ -1980,12 +1987,13 @@ int ad7146_i2c_suspend(struct device *dev)
 	struct ad7146_chip *ad7146 = i2c_get_clientdata(to_i2c_client(dev));
 	unsigned short pwr_data;
 
-	cancel_delayed_work_sync(&ad7146->work);
 	if (ad7146->pad_enable_state) {
 		pwr_data = shadow_reg[PWR_CONTROL].data | PWR_MODE_SHUTDOWN;
 		ad7146->write(ad7146->dev,
 			shadow_reg[PWR_CONTROL].addr, pwr_data);
 	}
+	disable_irq(ad7146->irq);
+	cancel_delayed_work(&ad7146->work);
 	dev_dbg(ad7146->dev, "%s end: pad_enable_state = %x\n",
 		__func__, ad7146->pad_enable_state);
 	return 0;
@@ -2019,6 +2027,7 @@ int ad7146_i2c_resume(struct device *dev)
 	ad7146->sw_updata = AD7146_SENS_NOT_DET;
 	ad7146->i2c_err_flag = AD7146_I2C_RW_NO_ERR;
 
+	enable_irq(ad7146->irq);
 	if (ad7146->pad_enable_state) {
 		ad7146_setup_defaults(ad7146);
 		ad7146_pad_setting(ad7146, ad7146->pad_enable_state);

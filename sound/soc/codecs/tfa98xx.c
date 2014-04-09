@@ -914,15 +914,11 @@ static void stereo_speaker_off(void)
 
 	pr_info("%s\n", __func__);
 	for (h = 0; h < 2; h++) {
-		err = Tfa98xx_SetMute(handles[h], Tfa98xx_Mute_Digital);
-		if (err != Tfa98xx_Error_Ok)
-			pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
-				__func__, h);
-		msleep(33);
 		err = Tfa98xx_SetMute(handles[h], Tfa98xx_Mute_Amplifier);
 		if (err != Tfa98xx_Error_Ok)
 			pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
 				__func__, h);
+		msleep(33);
 
 	/* NXP SL: Added checking if amplifier is still switching or not
 		to avoid pop sound */
@@ -1080,15 +1076,12 @@ static void mono_speaker_off(int channel)
 	int timeout;
 
 	pr_info("%s channel:%d\n", __func__, channel);
-	err = Tfa98xx_SetMute(handles[channel], Tfa98xx_Mute_Digital);
-	if (err != Tfa98xx_Error_Ok)
-		pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
-			__func__, channel);
-		msleep(33);
+
 	err = Tfa98xx_SetMute(handles[channel], Tfa98xx_Mute_Amplifier);
 	if (err != Tfa98xx_Error_Ok)
 		pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
 			__func__, channel);
+		msleep(33);
 
 	/* NXP SL: Added checking if amplifier is still switching or not
 		to avoid pop sound */
@@ -1447,15 +1440,11 @@ static void change_stereo_speaker_lr(int speaker_lr)
 
 	pr_info("%s\n", __func__);
 	for (h = 0; h < 2; h++) {
-		err = Tfa98xx_SetMute(handles[h], Tfa98xx_Mute_Digital);
-		if (err != Tfa98xx_Error_Ok)
-			pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
-				__func__, h);
-		msleep(33);
 		err = Tfa98xx_SetMute(handles[h], Tfa98xx_Mute_Amplifier);
 		if (err != Tfa98xx_Error_Ok)
 			pr_err("%s: Tfa98xx_SetMute failed, h=%d\n",
 				__func__, h);
+		msleep(33);
 
 		err = Tfa98xx_ReadRegister16(
 			handles[h], TFA98XX_STATUSREG, &status);

@@ -668,7 +668,6 @@ static int int_disc_isr(uint8_t int_disc_status)
 		}
 	} else if (BIT_MHL_EST_INT &  int_disc_status) {
 		uint8_t	msc_compat = BIT_PAGE_5_CBUS_MSC_COMPATIBILITY_CONTROL_ENABLE_XDEVCAP;
-		uint8_t m3_ctrl = VAL_PAGE_3_M3_CTRL_PEER_VERSION_PENDING_VALUE;
 
 		pr_info("%s: oCBUS Connection Established\n", __func__);
 
@@ -680,8 +679,6 @@ static int int_disc_isr(uint8_t int_disc_status)
 
 		mhl_pf_write_reg(REG_PAGE_5_CBUS_MSC_COMPATIBILITY_CONTROL,
 				 msc_compat);
-		mhl_pf_write_reg(REG_PAGE_3_M3_CTRL,
-				 m3_ctrl);
 
 		regs_init_for_ready_to_tmds_connection();
 		mhl_msc_cbus_communication_start();
