@@ -307,8 +307,14 @@ obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-rfkill.o msm_vibrator.o
 
 ifdef CONFIG_MACH_SONY_SIRIUS
 	obj-$(CONFIG_MACH_SONY_SIRIUS) += board-sony_sirius-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-gouf.o
+else ifdef CONFIG_MACH_SONY_SIRIUS_BRAZIL
+	obj-$(CONFIG_MACH_SONY_SIRIUS_BRAZIL) += board-sony_sirius_brazil-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-gouf.o
 else ifdef CONFIG_MACH_SONY_CASTOR
 	obj-$(CONFIG_MACH_SONY_CASTOR) += board-sony_castor-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
+else ifdef CONFIG_MACH_SONY_CASTOR_BRAZIL
+	obj-$(CONFIG_MACH_SONY_CASTOR_BRAZIL) += board-sony_castor_brazil-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
+else ifdef CONFIG_MACH_SONY_CASTOR_WINDY
+	obj-$(CONFIG_MACH_SONY_CASTOR_WINDY) += board-sony_castor_windy-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
 else
 	obj-$(CONFIG_ARCH_MSM8974) += board-8974-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-oem.o
 endif

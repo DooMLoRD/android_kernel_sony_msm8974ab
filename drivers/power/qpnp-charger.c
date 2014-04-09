@@ -323,6 +323,7 @@ struct qpnp_somc_params {
 	unsigned int		input_dc_ma;
 	struct delayed_work	enable_reg_boost_delayed;
 	int			disabled_rb_detect_cnt;
+	bool			dcin_online;
 };
 
 /**
@@ -1752,6 +1753,9 @@ qpnp_chg_dc_dcin_valid_irq_handler(int irq, void *_chip)
 		if (!dc_present) {
 			qpnp_chg_aicl_idc_set(chip, NO_CHANGE_LIMIT);
 			qpnp_chg_idcmax_set(chip, QPNP_CHG_I_MAX_MIN_100);
+			chip->somc_params.dcin_online = false;
+		} else {
+			chip->somc_params.dcin_online = true;
 		}
 		if (!dc_present && !qpnp_chg_is_usb_chg_plugged_in(chip)) {
 			clear_safety_timer_chg_failed(chip);
@@ -2059,6 +2063,8 @@ qpnp_power_get_property_mains(struct power_supply *psy,
 			!val->intval) {
 			pr_err("enabling regulator online=%d\n", val->intval);
 			val->intval = true;
+		} else if (!chip->somc_params.dcin_online) {
+			val->intval = false;
 		}
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -2367,7 +2373,7 @@ qpnp_batt_external_power_changed(struct power_supply *psy)
 		if (qpnp_chg_is_usb_chg_plugged_in(chip))
 			power_supply_set_online(chip->usb_psy, 0);
 		if (qpnp_chg_is_dc_chg_plugged_in(chip))
-			power_supply_set_online(&chip->dc_psy, 0);
+			chip->somc_params.dcin_online = false;
 	}
 
 	if (!delayed_work_pending(&chip->somc_params.rb_work) &&
