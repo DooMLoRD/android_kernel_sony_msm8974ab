@@ -1,0 +1,75 @@
+--------------------------------
+Change History
+--------------------------------
+DHD 1.88.57.4 - 2014.02.12
+ - Change MAX_KSO_ATTEMPTS value to 64 and insert osl_sleep(). 
+ - Fix initial scan logic, and reduce dwell time on passive channels to 110 .
+ - Enable adaptive scheduling feature. 
+  
+DHD 1.88.57.3 - 2014.01.17
+- Remove passive flag in p2p scan channel list in dhd driver, CASE#745850
+- Watchdog bark issue caused by the dhd_dpc thread, CASE#746973
+- Clear interworking data in DHD when bringing the interface down
+- Fix for pass point in p2p concurrency case
+
+DHD 1.88.57.2 - 2014.01.10
+- Add a flag to disable framebursting while in SoftAP mode for 11n AP certification test 4.2.31
+- Add Q1/77 for US country code in translate table, specific for SOMC
+ - Fixed the following CSP cases.
+	- CSP:736654 kmemleak from dhd_pno_set_for_ssid with legacy pno mode
+	- CSP:741190 Support MAPUT test case of WSC2.0 ( WPS-AP Test Plan 4.2.13, Overlapped PBC sessions)
+	-CSP:743285 Probe request doesn't include P2P IE at p2p scan phase.
+	-CSP:740883  Auto channel selection for SoftAP
+	-CSP:739601 Does not reply on terminal running iperf, when P2P(GC mode)+eSCO.
+	-CSP:743492 : About DTIM skip policy during Display OFF
+-  Fix for P2P certificaton test  5.1.20
+
+DHD 1.88.57.1 - 2013.12.04
+
+ - Eliminate TDLS_AUTO_ENABLE in Makefile
+ - Adding AP Privacy(ap_isolate) function
+ - Fixed a bug for negative padding
+ - Change CUSTOM_SUSPEND_BCN_LI_DTIM value to 3 from 0 as SOMC requested in Makefile
+ - Enable ipv6 router advertisement packet filter mode in suspend
+ - Change DTIM skip policy in suspend mode
+ 
+DHD 1.88.57 -  2013.11.18
+
+- Adding TDLS feaure 
+- Fixed the corner case of PNO, P2P issue
+- Support VHT feature in 2.4Ghz band
+- adding WL_IFACE_COMB_NUM_CHANNELS, ROAM_AP_ENV_DETECTION in Makefile
+
+DHD 1.88.47 -  2013.10.02
+
+- Adding VE feature code
+- Neighbor Discovery Offload bug Fix
+- Add 400ms delay only if supplicant call with Broad cast address when sending deauth frame
+- Keep bus wake(prevent bus sleep) when idletime is zero
+- OOB interrupt handler is not registered when 1st WLAN on failed in case of built-in dhd driver
+- Refactorization of p2p scan function wl_cfgp2p_escan()
+- WiFi-Direct connection delayed because of GO-Confirm delay
+- delete the previous VS(Vendor Specific) IE for a new VSIE
+- P2P GAS action frame search modification
+- Fix the wl_cfg80211_set_tx_power() function to set TX power correctly
+- Support for multichannel concurrency with the latest supplicant
+- Fixed memory leak issue on NDO code
+- Change the WLAN reset on/off time delay to same values of wifi_probe() function
+- Move chanspec conversion function between host and dongle to shared/bcmwifi
+- Check the WLAN interface status before sending the HANG event
+- Force to bring down the interface when the HANG event is occurred in case of SoftAP and MFG mode.
+- Stop Action frame RX timer if it received proper Response
+- removing unused code(SDIO interrupt disable) in dhd_bus_stop().
+- Clean up the packet filter implementations
+- Rearrange packet filter initialization codes
+- Clean up the wl_cfg80211_tx_set_power() function
+- Fix the logic to set vendor specific IE in case of SoftAP mode
+- Adding a condition to wl_cfg80211_set_power_mgmt() function to release wake lock only if PM is correctly set.
+- Fix for Set IFMODE failure during p2p tear down
+- ADD WL_IFACE_COMB_NUM_CHANNELS define for the -p2p- build option
+- Move location of cpu min clock setting for SoftAP
+- Do not block the action frame when the DFS channel was in the scan list already
+- Custom Country Code translation example table added. 
+
+DHD 1.88.32 - Initial Release for SOMC, 2013.07.30
+
