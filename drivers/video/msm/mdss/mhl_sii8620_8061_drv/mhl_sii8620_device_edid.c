@@ -140,13 +140,13 @@ static void mhl_dev_edid_setup_support_video(void)
 {
 	int i = 0;
 
-	pr_info("%s:mhl1/2 vic setup\n", __func__);
+	pr_debug("%s:mhl1/2 vic setup\n", __func__);
 	for (i = 0; i < SUPPORT_MHL_1_2_VIDEO_NUM; i++) {
 		mhl_1_2_support_vic_array[i] = mhl_1_2_support_video[i].vic;
 		pr_debug("set support vic=%d\n", mhl_1_2_support_vic_array[i]);
 	}
 
-	pr_info("%s:mhl3 vic setup\n", __func__);
+	pr_debug("%s:mhl3 vic setup\n", __func__);
 	for (i = 0; i < SUPPORT_MHL_3_VIDEO_NUM; i++) {
 		mhl_3_support_vic_array[i] = mhl_3_support_video[i].vic;
 		pr_debug("set support vic=%d\n", mhl_3_support_vic_array[i]);
@@ -205,7 +205,7 @@ static struct mhl_sii8620_device_edid_context edid_context;
 /* edid fifo control */
 static void set_current_edid_request_block(int block_num)
 {
-	pr_info("%s():block_num=%d\n", __func__, block_num);
+	pr_debug("%s():block_num=%d\n", __func__, block_num);
 	edid_context.current_edid_request_block = block_num;
 }
 
@@ -216,7 +216,10 @@ static uint8_t increment_current_edid_request_block(void)
 
 static uint8_t get_current_edid_request_block(void)
 {
-	pr_info("%s():%d\n", __func__, edid_context.current_edid_request_block);
+	pr_debug("%s():%d\n",
+		__func__,
+		edid_context.current_edid_request_block);
+
 	return edid_context.current_edid_request_block;
 }
 
@@ -328,7 +331,7 @@ int mhl_sii8620_device_edid_read_request(uint8_t block_number)
 			BIT_PAGE_5_DISC_CTRL5_DSM_OVRIDE);
 
 		if (block_number == 0) {
-			pr_info("%s()-block 0\n", __func__);
+			pr_debug("%s()-block 0\n", __func__);
 			mhl_pf_modify_reg(REG_EDID_FIFO_INT_MASK,
 				BIT_INTR9_EDID_ERROR_MASK | BIT_INTR9_EDID_DONE_MASK,
 				VAL_INTR9_EDID_ERROR_MASK | VAL_INTR9_EDID_DONE_MASK);
@@ -337,7 +340,7 @@ int mhl_sii8620_device_edid_read_request(uint8_t block_number)
 					 BIT_PAGE_2_TPI_CBUS_START_GET_EDID_START_0);
 		} else {
 			uint8_t param = (uint8_t)(1 << (block_number-1));
-			pr_info("%s:EDID HW Assist:Reg %02X:%02x to %02X\n",
+			pr_debug("%s:EDID HW Assist:Reg %02X:%02x to %02X\n",
 				 __func__, REG_PAGE_2_EDID_START_EXT, param);
 			mhl_pf_write_reg(REG_PAGE_2_EDID_START_EXT, param);
 		}
@@ -388,7 +391,7 @@ static int mhl_edid_start_edid_request(void)
 
 void mhl_device_start_edid_read(void)
 {
-	pr_info("%s()\n", __func__);
+	pr_debug("%s()\n", __func__);
 
 	/* edid read must not be executed in hdcp engine activating,
 	   otherwise the edid data could be broken.
@@ -403,7 +406,7 @@ void mhl_device_start_edid_read(void)
 	mhl_dev_edid_mhlsink_hev_init();
 
 	if (edid_context.is_Receive_EDID_DONE == false) {
-		pr_info("%s:queued blk 0 req\n", __func__);
+		pr_debug("%s:queued blk 0 req\n", __func__);
 		edid_context.is_request_queued = true;
 		return;
 	}
@@ -416,7 +419,7 @@ void mhl_device_start_edid_read(void)
 
 static void mhl_device_clear_edid_done_timer(void *callback_param)
 {
-	pr_info("%s:expired\n", __func__);
+	pr_warn("%s:expired\n", __func__);
 	edid_context.is_Receive_EDID_DONE = true;
 
 	mhl_dev_clear_cbusp_cond_processing(DEV_EDID_READ);
@@ -428,7 +431,7 @@ void mhl_sii8620_device_edid_init(void)
 {
 	int ret;
 
-	pr_info("%s()\n", __func__);
+	pr_debug("%s()\n", __func__);
 	mhl_sii8620_device_set_edid_block_size(EDID_BLOCK_SIZE);
 	mhl_lib_edid_set_edid((const uint8_t *)get_stored_edid_block());
 	mhl_device_edid_init_edid_block_info();
@@ -627,7 +630,7 @@ static int set_upstream_edid(uint8_t *edid_buf, uint16_t length)
 {
 	int reg_val = -1;
 
-	pr_info("%s:edid write length=%d\n", __func__, length);
+	pr_debug("%s:edid write length=%d\n", __func__, length);
 
 	drive_hpd_low();
 
@@ -692,16 +695,16 @@ static int set_upstream_edid(uint8_t *edid_buf, uint16_t length)
 /* return false : invalid data, otherwise true */
 static bool mhl_dev_edid_do_edid_filter(uint8_t *edid_buf_read_ptr)
 {
-	pr_info("%s()", __func__);
+	pr_debug("%s()", __func__);
 
 	if (IS_BLOCK_0(edid_buf_read_ptr)) {
 		edid_filter_prune_block_0(edid_buf_read_ptr);
 	} else if (IS_EXT_BLOCK(edid_buf_read_ptr)) {
-		pr_info("%s:ext blk is arrived\n", __func__);
+		pr_debug("%s:ext blk is arrived\n", __func__);
 		edid_filter_prune_ext_blk(edid_buf_read_ptr);
 	} else
 		/* nothing to do*/
-		pr_info("%s:no blk0, no ext blk.\n", __func__);
+		pr_debug("%s:no blk0, no ext blk.\n", __func__);
 
 	return true;
 }
@@ -731,7 +734,7 @@ int  mhl_8620_dev_int_edid_isr(uint8_t int_edid_devcap_status)
 		 * skip all edid receiving procedure
 		 * and starts the new request.
 		 */
-		pr_info("%s:queue has new req. skip\n", __func__);
+		pr_debug("%s:queue has new req. skip\n", __func__);
 		goto retry_edid_read;
 	}
 
@@ -742,7 +745,7 @@ int  mhl_8620_dev_int_edid_isr(uint8_t int_edid_devcap_status)
 		uint8_t *edid_buf_read_ptr;
 		EDID_FIFO_BLOCK_OFFSET block_num;
 
-		pr_info("%s: EDID_DONE. available in fifo\n", __func__);
+		pr_debug("%s: EDID_DONE. available in fifo\n", __func__);
 
 		ddcStatus = mhl_pf_read_reg(REG_PAGE_0_DDC_STATUS);
 		mhl_pf_modify_reg(REG_PAGE_5_DISC_CTRL5,
@@ -765,7 +768,7 @@ int  mhl_8620_dev_int_edid_isr(uint8_t int_edid_devcap_status)
 		else
 			block_num = block_0;
 
-		pr_info("%s: fifo offset=%d, reqest block=%d\n",
+		pr_debug("%s: fifo offset=%d, reqest block=%d\n",
 			__func__ , edid_offset,
 			get_current_edid_request_block());
 
@@ -775,18 +778,15 @@ int  mhl_8620_dev_int_edid_isr(uint8_t int_edid_devcap_status)
 		 */
 		{
 			int write_offset = edid_block_size * get_current_edid_request_block();
-			pr_info("%s:write offset = %d\n", __func__, write_offset);
+			pr_debug("%s:write offset = %d\n",
+				__func__, write_offset);
 			edid_buf_read_ptr = get_stored_edid_block() + write_offset;
 		}
 
 		/* read 128 byte edid data from FIFO and
 		 * write the data to "edid_block_data" */
-		if (MHL_SUCCESS == read_edid_data_from_edid_fifo(edid_buf_read_ptr, block_num)) {
-			pr_info("%s:saved blk0 is ...\n", __func__);
-			DUMP_EDID_BLOCK(0, get_stored_edid_block(), edid_block_size);
-			/* if (!mhl_dev_edid_do_edid_filter(edid_buf_read_ptr))
-				goto retry_edid_read; */
-		} else
+		if (MHL_SUCCESS != read_edid_data_from_edid_fifo(
+			edid_buf_read_ptr, block_num))
 			goto retry_edid_read;
 
 		/* try to read next block or finish */
@@ -819,7 +819,7 @@ int  mhl_8620_dev_int_edid_isr(uint8_t int_edid_devcap_status)
 	}
 
 	if (edid_context.is_request_queued == true) {
-		pr_info("%s:queued read request exists", __func__);
+		pr_debug("%s:queued read request exists", __func__);
 		goto retry_edid_read;
 	}
 
@@ -838,12 +838,15 @@ edid_read_stop:
 /* retry edid read from block 0 */
 retry_edid_read:
 	if (edid_retry_cnt < EDID_RETRY_MAX) {
-		pr_info("%s: retry edid read. cnt=0x2%x\n",
+		pr_warn("%s: retry edid read. cnt=0x2%x\n",
 			__func__, edid_retry_cnt);
 		mhl_device_start_edid_read();
 		edid_retry_cnt++;
-	} else
+	} else {
+		pr_warn("%s: retry end!! (%d retry)\n",
+			__func__, edid_retry_cnt);
 		goto edid_read_stop;
+	}
 
 	return int_edid_devcap_status;
 }
@@ -911,7 +914,7 @@ static void edid_filter_prune_ext_blk(uint8_t *edid)
 	}
 
 	if (mhl_device_is_peer_device_mhl1_2()) {
-		pr_info("%s:MHL1/2\n" , __func__);
+		pr_debug("%s:MHL1/2\n" , __func__);
 
 		/* remove all unsupported vic */
 		mhl_lib_edid_remove_vic_from_svd(
@@ -931,7 +934,7 @@ static void edid_filter_prune_ext_blk(uint8_t *edid)
 		uint8_t length = 0;
 		uint8_t *mhl_supp_4k_vic = NULL;
 
-		pr_info("%s:MHL3\n" , __func__);
+		pr_debug("%s:MHL3\n" , __func__);
 
 		/* remove all unsupported vic */
 		mhl_lib_edid_remove_vic_from_svd(
@@ -1022,7 +1025,8 @@ static void mhl_device_edid_add_mhlsink_sprt_hev(const uint8_t *hev, int length)
 		/* the filter is used in unit test */
 		if (isMhlSuptFilter) {
 			if (mhl_dev_edid_is_vic_support(*hev)) {
-				pr_info("%s:add hdmi vic : %d\n" , __func__, *hev);
+				pr_debug("%s:add hdmi vic : %d\n",
+					__func__, *hev);
 				mhl_sink_sprt_hev_vic[cnt++] = *hev;
 			}
 		} else {

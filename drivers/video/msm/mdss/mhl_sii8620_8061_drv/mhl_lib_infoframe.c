@@ -215,7 +215,7 @@ void print_vic_modes(uint8_t vic)
 			break;
 		}
 	}
-        pr_debug("VIC = %d (%s)\n", vic, vic_name_table[i].name);
+	pr_info("VIC = %d (%s)\n", vic, vic_name_table[i].name);
 }
 
 uint8_t calculate_avi_info_frame_checksum(hw_avi_payload_t *payload)
@@ -280,7 +280,7 @@ int is_valid_vsif(vendor_specific_info_frame_t *vsif)
 	checksum = calculate_generic_checksum((uint8_t *)vsif, 0,
 			sizeof(vsif->header) + vsif->header.length );
 	if (0 != checksum) {
-		pr_warn("%s: VSIF info frame checksum is: 0x%02x "
+		pr_err("%s: VSIF info frame checksum is: 0x%02x "
 			"should be 0\n", __func__, checksum);
 		/*
 			Try again, assuming that the header includes the checksum.

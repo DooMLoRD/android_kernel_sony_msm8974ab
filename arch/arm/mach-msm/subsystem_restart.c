@@ -480,8 +480,14 @@ static void subsystem_powerup(struct subsys_device *dev, void *data)
 
 	pr_info("[%p]: Powering up %s\n", current, name);
 	init_completion(&dev->err_ready);
-	if (dev->desc->powerup(dev->desc) < 0)
-		panic("[%p]: Powerup error: %s!", current, name);
+	if (dev->desc->powerup(dev->desc) < 0) {
+		/* If a system shutdown is underway, ignore errors. */
+		if (system_state == SYSTEM_POWER_OFF) {
+			pr_err("[%p]: Powerup error: %s!", current, name);
+			return;
+		} else
+			panic("[%p]: Powerup error: %s!", current, name);
+	}
 
 	ret = wait_for_err_ready(dev);
 	if (ret)

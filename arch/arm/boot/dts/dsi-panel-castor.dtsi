@@ -12,6 +12,7 @@
  */
 
 &mdss_mdp {
+	qcom,mdss-ib-factor = <11 5>;
 	dsi_orise_auo_wuxga_vid: somc,orise_auo_wuxga_panel {
 		qcom,mdss-dsi-panel-name = "auo orise wuxga video";
 		qcom,mdss-dsi-panel-controller = <&mdss_dsi0>;

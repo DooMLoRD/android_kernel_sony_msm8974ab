@@ -81,3 +81,5 @@ obj-$(CONFIG_AD7146) += ad7146.o
 obj-y				+= felica_snfc/
 obj-$(CONFIG_ONESEG_TUNER_SMTVJ18X) += oneseg_tuner_drv.o
 obj-$(CONFIG_ISDBT_TUNER_SMTEJ11X) += isdbt_tuner_drv.o
+obj-$(CONFIG_SONY_JPROBE_LMK) += idd_jprobe_lmk.o
+obj-$(CONFIG_SONY_JPROBE_PM) += idd_jprobe_pm.o

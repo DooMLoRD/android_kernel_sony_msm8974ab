@@ -226,6 +226,9 @@ struct fsg_lun {
 	unsigned int	blksize;	/* logical block size of bound block device */
 	struct device	dev;
 	char		*lun_filename;
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+	atomic_t	eject_cdrom_timer_required;
+#endif
 #ifdef CONFIG_USB_MSC_PROFILING
 	spinlock_t	lock;
 	struct {
@@ -1084,6 +1087,10 @@ static ssize_t fsg_store_file(struct device *dev, struct device_attribute *attr,
 				curlun->unit_attention_data =
 					SS_NOT_READY_TO_READY_TRANSITION;
 				atomic_set(&curlun->wait_for_mount, 0);
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+				atomic_set(
+				&curlun->eject_cdrom_timer_required, 1);
+#endif
 			}
 		}
 	}

@@ -43,7 +43,7 @@ bool cbus_wb_is_valid_checksum(uint8_t *p_HEV_VIC_block_data)
 		checksum += p_HEV_VIC_block_data[i];
 
 	if (checksum) {
-		pr_warn("%s: false, 0x%x\n", __func__, checksum);
+		pr_err("%s: false, 0x%x\n", __func__, checksum);
 		return false;
 	}
 
@@ -167,7 +167,7 @@ void cbus_wb_request_write_burst(
 	} else if ((burst_offset + length) > MHL_SCRATCHPAD_SIZE) {
 		pr_err("%s: invalid offset + length\n", __func__);
 	} else {
-		pr_err("%s: Request Write Burst command.\n", __func__);
+		pr_debug("%s: Request Write Burst command.\n", __func__);
 		set_cbus_command_block(
 			MHL_WRITE_BURST, MHL_SCRATCHPAD_SIZE, 0, data);
 	}

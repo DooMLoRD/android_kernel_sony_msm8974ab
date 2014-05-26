@@ -747,6 +747,7 @@ void dwc3_otg_init_sm(struct dwc3_otg *dotg)
 	}
 }
 
+extern int qpnp_chg_notify_invalid_usb(void);
 /**
  * dwc3_otg_sm_work - workqueue function.
  *
@@ -851,6 +852,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					if (dotg->charger_retry_count ==
 						max_chgr_retry_count) {
 						dwc3_otg_set_power(phy, 0);
+						qpnp_chg_notify_invalid_usb();
 						pm_runtime_put_sync(phy->dev);
 						break;
 					}

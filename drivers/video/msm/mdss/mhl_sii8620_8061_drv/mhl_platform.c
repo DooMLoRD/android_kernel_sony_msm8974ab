@@ -200,7 +200,7 @@ static int __init mhl_pf_init(void)
 	int rc = -1;
 	struct i2c_client *client;
 
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 
 	chip_pwr_state = CHIP_PWR_OFF;
 
@@ -230,7 +230,7 @@ static int __init mhl_pf_init(void)
 		rc = PTR_ERR(pdev->class);
 		goto failed_error;
 	}
-	pr_info("%s:class name : %s\n", __func__, pdev->class->name);
+	pr_debug("%s:class name : %s\n", __func__, pdev->class->name);
 	i2c_set_clientdata(client, mhl_ctrl);
 
 	mhl_pf_i2c_init(client->adapter);
@@ -269,7 +269,7 @@ static void __exit mhl_pf_exit(void)
 	struct mhl_tx_ctrl *mhl_ctrl;
 	struct i2c_client *client;
 
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 
 	client = mhl_pf_get_i2c_client();
 	if (!client) {
@@ -284,7 +284,7 @@ static void __exit mhl_pf_exit(void)
 	 */
 	/* release clock */
 	if (mhl_clk) {
-		pr_info("%s: disable mhl clk\n", __func__);
+		pr_debug("%s: disable mhl clk\n", __func__);
 		clk_disable_unprepare(mhl_clk);
 		clk_put(mhl_clk);
 	}
@@ -300,7 +300,7 @@ static void __exit mhl_pf_exit(void)
 	class_destroy(client->dev.class);
 
 	if (!mhl_ctrl)
-		pr_warn("%s: i2c get client data failed\n", __func__);
+		pr_err("%s: i2c get client data failed\n", __func__);
 	else
 		devm_kfree(&client->dev, mhl_ctrl);
 }

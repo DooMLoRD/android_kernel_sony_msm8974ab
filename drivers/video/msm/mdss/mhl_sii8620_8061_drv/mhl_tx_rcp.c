@@ -479,7 +479,7 @@ int mhl_tx_rcp_start(void)
 
 			err = input_register_device(s_rcp_info.input);
 			if (err < 0) {
-				pr_warn("%s: failed to register input device\n"
+				pr_err("%s: failed to register input device\n"
 						, __func__);
 				vfree(s_rcp_info.key_code_tbl);
 				mhl_tx_rcp_common_resource_free();

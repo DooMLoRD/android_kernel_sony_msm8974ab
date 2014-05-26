@@ -401,6 +401,9 @@ struct ad7146_chip {
 	int current_pad_no;
 	struct ad7146_product_data product_data[PAD_NUM_MAX];
 	unsigned short save_data_point[PAD_NUM_MAX];
+	unsigned short fc_flag;
+	unsigned short keep_detect_flag;
+	unsigned short sv_threshold[PAD_NUM_MAX];
 };
 
 
@@ -1003,6 +1006,98 @@ static ssize_t show_dac_mid_value(struct device *dev,
 	return ret;
 }
 
+static ssize_t do_force_calibrate(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct ad7146_chip *ad7146 = dev_get_drvdata(dev);
+	int err;
+	unsigned short val;
+	unsigned short temp;
+	int cnt;
+	struct ad7146_driver_data *sw = NULL;
+	unsigned short temp_th[PAD_NUM_MAX];
+
+	err = kstrtou16(buf, 0, &val);
+	if (err)
+		goto force_calib_end;
+	if (ENABLE_AD7146 != val) {
+		err = -EINVAL;
+		goto force_calib_end;
+	}
+	if (!(ad7146->pad_enable_state & STG0_EN_FLG) ||
+		!(ad7146->pad_enable_state & STG1_EN_FLG)) {
+		ad7146->fc_flag = DISABLE_AD7146;
+		ad7146->keep_detect_flag = DISABLE_AD7146;
+		err = -EINVAL;
+		goto force_calib_end;
+	}
+
+	mutex_lock(&ad7146->mutex);
+	if (!ad7146->fc_flag) {
+		ad7146->read(ad7146->dev, STG0_HIGH_THRESHOLD,
+			&ad7146->sv_threshold[STG_ZERO]);
+		ad7146->read(ad7146->dev, STG1_HIGH_THRESHOLD,
+			&ad7146->sv_threshold[STG_ONE]);
+		dev_dbg(ad7146->dev,
+			"%s:save threshold: PAD1:%04x, PAD2:%04x\n",
+			__func__, ad7146->sv_threshold[STG_ZERO],
+			ad7146->sv_threshold[STG_ONE]);
+	}
+	ad7146->keep_detect_flag = DISABLE_AD7146;
+	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
+		sw = &ad7146->sw[cnt];
+		sw->state = IDLE;
+		if (STG_ZERO == sw->index)
+			switch_set_state(&ad7146->sw_stg0, AD7146_SENS_NOT_DET);
+		else if (STG_ONE == sw->index)
+			switch_set_state(&ad7146->sw_stg1, AD7146_SENS_NOT_DET);
+		else
+			dev_err(ad7146->dev,
+				"Failed to set state of the switch device %u.\n",
+				sw->index);
+	}
+	ad7146_set_switch_status(ad7146, AD7146_SENS_NOT_DET);
+	ad7146->sw_updata = AD7146_SENS_NOT_DET;
+	sysfs_notify(&ad7146->dev->kobj, NULL, "ad7146_sw_updata");
+	ad7146->read(ad7146->dev, AMB_COMP_CTRL0_REG, &temp);
+	temp = temp | AD7146_FORCED_CAL_MASK;
+	ad7146->write(ad7146->dev, AMB_COMP_CTRL0_REG, temp);
+	msleep(MIN_FORCED_CAL_SLEEP);
+	ad7146->read(ad7146->dev, STG0_HIGH_THRESHOLD, &temp_th[STG_ZERO]);
+	ad7146->read(ad7146->dev, STG1_HIGH_THRESHOLD, &temp_th[STG_ONE]);
+	if (!ad7146->fc_flag &&
+		(temp_th[STG_ZERO] > ad7146->sv_threshold[STG_ZERO] ||
+		temp_th[STG_ONE] > ad7146->sv_threshold[STG_ONE]))
+		ad7146->fc_flag = ENABLE_AD7146;
+	if (ad7146->fc_flag &&
+		(temp_th[STG_ZERO] <= ad7146->sv_threshold[STG_ZERO] ||
+		temp_th[STG_ONE] <= ad7146->sv_threshold[STG_ONE])) {
+		ad7146->fc_flag = DISABLE_AD7146;
+		dev_dbg(ad7146->dev,
+			"%s:fc flag off: PAD1:%04x < %04x and PAD2:%04x < %04x\n",
+			__func__,
+			temp_th[STG_ZERO], ad7146->sv_threshold[STG_ZERO],
+			temp_th[STG_ONE], ad7146->sv_threshold[STG_ONE]);
+	}
+	ad7146->read(ad7146->dev, STG_LOW_INT_STA_REG, &temp);
+	ad7146->read(ad7146->dev, STG_HIGH_INT_STA_REG, &temp);
+	mutex_unlock(&ad7146->mutex);
+	if (ad7146->i2c_err_flag) {
+		err = -EIO;
+		dev_err(ad7146->dev,
+			"%s: Failed to force calibration. (%d)\n",
+			__func__, err);
+		goto force_calib_end;
+	}
+	dev_dbg(ad7146->dev,
+		"%s: Force calibration done. fc_flag=%u keep_detect_flag=%u\n",
+		__func__, ad7146->fc_flag, ad7146->keep_detect_flag);
+	err = count;
+
+force_calib_end:
+	return err;
+}
+
 static ssize_t store_pad_num(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -1226,6 +1321,11 @@ static ssize_t store_pad_set(struct device *dev,
 
 	if (val != ad7146->pad_enable_state) {
 		cancel_delayed_work(&ad7146->work);
+		if (!(ad7146->pad_enable_state & STG0_EN_FLG) ||
+			!(ad7146->pad_enable_state & STG1_EN_FLG)) {
+			ad7146->fc_flag = DISABLE_AD7146;
+			ad7146->keep_detect_flag = DISABLE_AD7146;
+		}
 		if (!ad7146->pad_enable_state) {
 			mutex_lock(&ad7146->mutex);
 			ad7146_setup_defaults(ad7146);
@@ -1238,20 +1338,18 @@ static ssize_t store_pad_set(struct device *dev,
 		for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
 			if ((prev_mode & AD7146_BIT_MASK(cnt)) &&
 				!(val & AD7146_BIT_MASK(cnt))) {
-				sw = &(ad7146->sw[cnt]);
+				sw = &ad7146->sw[cnt];
 				sw->state = IDLE;
-				switch (sw->index) {
-				case STG_ZERO:
-				switch_set_state(&ad7146->sw_stg0,
+				if (STG_ZERO == sw->index)
+					switch_set_state(&ad7146->sw_stg0,
 						AD7146_SENS_NOT_DET);
-					break;
-				case STG_ONE:
-				switch_set_state(&ad7146->sw_stg1,
+				else if (STG_ONE == sw->index)
+					switch_set_state(&ad7146->sw_stg1,
 						AD7146_SENS_NOT_DET);
-					break;
-				default:
-					break;
-				}
+				else
+					dev_err(ad7146->dev,
+						"Failed to set state of the switch device %u.\n",
+						sw->index);
 			}
 		}
 		if (!val) {
@@ -1276,6 +1374,8 @@ static struct device_attribute ad7146_sysfs_entries[] = {
 	__ATTR(ad7146_dac_mid_val,
 		(S_IWUSR | S_IWGRP | S_IRUSR | S_IRGRP),
 		show_dac_mid_value, store_dac_mid_value),
+	__ATTR(ad7146_force_calib,
+		(S_IWUSR | S_IWGRP), NULL, do_force_calibrate),
 	__ATTR(ad7146_pad_set,
 		(S_IWUSR | S_IWGRP), NULL, store_pad_set),
 	__ATTR(ad7146_pad_num,
@@ -1432,9 +1532,35 @@ static void switch_set_work(struct work_struct *work)
 	}
 	mutex_unlock(&ad7146->mutex);
 
+	if (ad7146->fc_flag &&
+		(stg_h_threshold[STG_ZERO] <= ad7146->sv_threshold[STG_ZERO] ||
+		stg_h_threshold[STG_ONE] <= ad7146->sv_threshold[STG_ONE])) {
+		ad7146->fc_flag = DISABLE_AD7146;
+		ad7146->keep_detect_flag = DISABLE_AD7146;
+		dev_dbg(ad7146->dev,
+			"%s:fc flag off: PAD1:%04x < %04x and PAD2:%04x < %04x\n",
+			__func__,
+			stg_h_threshold[STG_ZERO],
+			ad7146->sv_threshold[STG_ZERO],
+			stg_h_threshold[STG_ONE],
+			ad7146->sv_threshold[STG_ONE]);
+	}
+
+	if (ad7146->fc_flag && !ad7146->keep_detect_flag) {
+		for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
+			if (stg_data_point[cnt] == sv_data_point[cnt] &&
+				AD7146_HIGH == stg_data_point[cnt]) {
+				ad7146->keep_detect_flag = ENABLE_AD7146;
+				dev_dbg(ad7146->dev, "%s:keep_detect_flag on\n",
+					__func__);
+				break;
+			}
+		}
+	}
+
 	tm_val = SWITCH_WORK_NO_JITTER;
 	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
-		if (stg_data_point[cnt] == AD7146_NOT_SET)
+		if (AD7146_NOT_SET == stg_data_point[cnt])
 			continue;
 		/* check data point - save : current */
 		if (stg_data_point[cnt] != sv_data_point[cnt]) {
@@ -1449,8 +1575,14 @@ static void switch_set_work(struct work_struct *work)
 			continue;
 		}
 
+		dev_dbg(ad7146->dev,
+			"%s: stage%d: state=%u: keep_detect_flag=%u!\n",
+			__func__, cnt, switch_flag[cnt],
+			ad7146->keep_detect_flag);
+		switch_flag[cnt] |= ad7146->keep_detect_flag;
+
 		/* update switch state */
-		sw = &(ad7146->sw[cnt]);
+		sw = &ad7146->sw[cnt];
 		switch (sw->state) {
 		case IDLE:
 			/* Sensor went to active */
@@ -1459,18 +1591,16 @@ static void switch_set_work(struct work_struct *work)
 					"%s: stage%d: proximity touched!\n",
 					__func__, sw->index);
 				sw->state = switch_flag[cnt];
-				switch (sw->index) {
-				case STG_ZERO:
-				switch_set_state(&ad7146->sw_stg0,
+				if (STG_ZERO == sw->index)
+					switch_set_state(&ad7146->sw_stg0,
 						AD7146_SENS_DET);
-					break;
-				case STG_ONE:
-				switch_set_state(&ad7146->sw_stg1,
+				else if (STG_ONE == sw->index)
+					switch_set_state(&ad7146->sw_stg1,
 						AD7146_SENS_DET);
-					break;
-				default:
-					break;
-				}
+				else
+					dev_err(ad7146->dev,
+						"Failed to set state of the switch device %u.\n",
+						sw->index);
 				sw_data |= AD7146_BIT_MASK(sw->index);
 				mutex_lock(&ad7146->mutex);
 				ad7146_hys_comp_neg(ad7146, sw->index);
@@ -1488,18 +1618,16 @@ static void switch_set_work(struct work_struct *work)
 					"%s: stage%d: proximity released!\n",
 					__func__, sw->index);
 				sw->state = switch_flag[cnt];
-				switch (sw->index) {
-				case STG_ZERO:
-				switch_set_state(&ad7146->sw_stg0,
+				if (STG_ZERO == sw->index)
+					switch_set_state(&ad7146->sw_stg0,
 						AD7146_SENS_NOT_DET);
-					break;
-				case STG_ONE:
-				switch_set_state(&ad7146->sw_stg1,
+				else if (STG_ONE == sw->index)
+					switch_set_state(&ad7146->sw_stg1,
 						AD7146_SENS_NOT_DET);
-					break;
-				default:
-					break;
-				}
+				else
+					dev_err(ad7146->dev,
+						"Failed to set state of the switch device %u.\n",
+						sw->index);
 				mutex_lock(&ad7146->mutex);
 				ad7146_hys_comp_pos(ad7146, sw->index);
 				mutex_unlock(&ad7146->mutex);
@@ -1866,6 +1994,8 @@ static int ad7146_probe(struct i2c_client *client,
 	ad7146->save_data_point[STG_ZERO] = AD7146_NOT_SET;
 	ad7146->save_data_point[STG_ONE] = AD7146_NOT_SET;
 	ad7146->sw_updata = DISABLE_AD7146;
+	ad7146->fc_flag = DISABLE_AD7146;
+	ad7146->keep_detect_flag = DISABLE_AD7146;
 
 	error = read_data_from_device_tree(ad7146);
 	if (error)
@@ -1930,20 +2060,16 @@ static int ad7146_probe(struct i2c_client *client,
 	getStageInfo(ad7146);
 	ad7146_pad_setting(ad7146, STGX_ALL_OFF);
 	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
-		driver_data = &(ad7146->sw[cnt]);
+		driver_data = &ad7146->sw[cnt];
 		driver_data->state = IDLE;
-		switch (driver_data->index) {
-		case STG_ZERO:
-			switch_set_state(&ad7146->sw_stg0,
-				AD7146_SENS_NOT_DET);
-				break;
-		case STG_ONE:
-			switch_set_state(&ad7146->sw_stg1,
-					AD7146_SENS_NOT_DET);
-			break;
-		default:
-			break;
-		}
+		if (STG_ZERO == driver_data->index)
+			switch_set_state(&ad7146->sw_stg0, AD7146_SENS_NOT_DET);
+		else if (STG_ONE == driver_data->index)
+			switch_set_state(&ad7146->sw_stg1, AD7146_SENS_NOT_DET);
+		else
+			dev_err(ad7146->dev,
+				"Failed to set state of the switch device %u.\n",
+				driver_data->index);
 	}
 	ad7146_set_switch_status(ad7146, AD7146_SENS_NOT_DET);
 	ad7146->sw_updata = AD7146_SENS_NOT_DET;
@@ -2008,24 +2134,22 @@ int ad7146_i2c_resume(struct device *dev)
 	dev_dbg(ad7146->dev, "%s call: pad_enable_state = %x\n",
 		__func__, ad7146->pad_enable_state);
 	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
-		sw = &(ad7146->sw[cnt]);
+		sw = &ad7146->sw[cnt];
 		sw->state = IDLE;
-		switch (sw->index) {
-		case STG_ZERO:
-			switch_set_state(&ad7146->sw_stg0,
-				AD7146_SENS_NOT_DET);
-				break;
-		case STG_ONE:
-			switch_set_state(&ad7146->sw_stg1,
-					AD7146_SENS_NOT_DET);
-			break;
-		default:
-			break;
-		}
+		if (STG_ZERO == sw->index)
+			switch_set_state(&ad7146->sw_stg0, AD7146_SENS_NOT_DET);
+		else if (STG_ONE == sw->index)
+			switch_set_state(&ad7146->sw_stg1, AD7146_SENS_NOT_DET);
+		else
+			dev_err(ad7146->dev,
+				"Failed to set state of the switch device %u.\n",
+				sw->index);
 	}
 	ad7146_set_switch_status(ad7146, AD7146_SENS_NOT_DET);
 	ad7146->sw_updata = AD7146_SENS_NOT_DET;
 	ad7146->i2c_err_flag = AD7146_I2C_RW_NO_ERR;
+	ad7146->fc_flag = DISABLE_AD7146;
+	ad7146->keep_detect_flag = DISABLE_AD7146;
 
 	enable_irq(ad7146->irq);
 	if (ad7146->pad_enable_state) {

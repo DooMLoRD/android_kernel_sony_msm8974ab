@@ -20,14 +20,16 @@
 
 struct mmc_cd_gpio {
 	unsigned int gpio;
-	char label[0];
 	bool status;
 #ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
 	int irq_detect;
 #endif
+	char label[0];
+	/* Don't add any fields at the end of this structure as they will
+	 * overwrite the label. */
 };
 
-static int mmc_cd_get_status(struct mmc_host *host)
+int mmc_cd_get_status(struct mmc_host *host)
 {
 	int ret = -ENOSYS;
 	struct mmc_cd_gpio *cd = host->hotplug.handler_priv;

@@ -320,6 +320,7 @@ static int csw_hack_sent;
 #define STORAGE_MODE_NONE	0
 #define STORAGE_MODE_MSC	1
 #define STORAGE_MODE_CDROM	2
+#define STORAGE_MODE_MSC_CDROM	3
 
 /* Length of inquiry string. Vendor (8 chars), product (16 chars),
  * release (4 hexadecimal digits) and NUL byte
@@ -1749,6 +1750,14 @@ static int do_start_stop(struct fsg_common *common)
 	loej  = common->cmnd[4] & 0x02;
 	start = common->cmnd[4] & 0x01;
 
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+	if (loej && start && (curlun == &common->luns_all[common->msc_nluns])) {
+		eject_cdrom_timer_stop();
+		atomic_set(&curlun->eject_cdrom_timer_required, 0);
+		return 0;
+	}
+#endif
+
 	if (start) {
 		if (loej && !fsg_lun_is_open(curlun)) {
 			if (curlun->lun_filename) {
@@ -1861,6 +1870,68 @@ static int do_mode_select(struct fsg_common *common, struct fsg_buffhd *bh)
 	return -EINVAL;
 }
 
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+static int do_eject(struct fsg_common *common, struct fsg_lun *curlun)
+{
+	if (!common || !curlun)
+		return -EINVAL;
+
+	/* Simulate an unload/eject */
+	if (fsg_lun_is_open(curlun)) {
+		if (common->ops && common->ops->pre_eject) {
+			int r = common->ops->pre_eject(common, curlun,
+					curlun - common->luns);
+			if (unlikely(r < 0))
+				return r;
+			else if (r)
+				return 0;
+		}
+
+		down_write(&common->filesem);
+		fsg_lun_close(curlun);
+		atomic_set(&curlun->wait_for_mount, 0);
+		curlun->unit_attention_data = SS_MEDIUM_NOT_PRESENT;
+		up_write(&common->filesem);
+	}
+
+	if (common->ops && common->ops->post_eject)
+		common->ops->post_eject(common, curlun,
+					curlun - common->luns);
+
+	return 0;
+}
+
+static int do_reload(struct fsg_common *common, struct fsg_lun *curlun)
+{
+	if (!common || !curlun)
+		return -EINVAL;
+
+	atomic_set(&curlun->eject_cdrom_timer_required, 1);
+	if (!fsg_lun_is_open(curlun)) {
+		if (curlun->lun_filename) {
+			int rc;
+			down_write(&common->filesem);
+			rc = fsg_lun_open(curlun, curlun->lun_filename);
+			up_write(&common->filesem);
+			if (!rc) {
+				curlun->unit_attention_data =
+					SS_NOT_READY_TO_READY_TRANSITION;
+				atomic_set(&curlun->wait_for_mount, 0);
+			} else {
+				curlun->sense_data =
+					SS_MEDIUM_NOT_PRESENT;
+				return -EINVAL;
+			}
+		} else {
+			curlun->sense_data = SS_MEDIUM_NOT_PRESENT;
+			return -EINVAL;
+		}
+		return 0;
+	}
+
+	return 0;
+}
+#endif
 
 /*-------------------------------------------------------------------------*/
 
@@ -2498,6 +2569,14 @@ static int do_scsi_command(struct fsg_common *common)
 		reply = check_command(common, 6, DATA_DIR_NONE,
 				0, 1,
 				"TEST UNIT READY");
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+		if (reply == 0 && common->curlun && atomic_read(
+			&common->curlun->eject_cdrom_timer_required)) {
+			eject_cdrom_timer_start(USB_AUTO_CDROM_EJECTION_TIME);
+			atomic_set(
+			&common->curlun->eject_cdrom_timer_required, 0);
+		}
+#endif
 		break;
 
 	/*
@@ -3146,6 +3225,9 @@ static void fsg_common_setup_luns(struct fsg_common *common)
 	if (common->storage_mode == STORAGE_MODE_MSC ||
 		common->cdrom_nluns < 1) {
 		common->nluns = common->msc_nluns;
+		common->luns = common->luns_all;
+	} else if (common->storage_mode == STORAGE_MODE_MSC_CDROM) {
+		common->nluns = common->msc_nluns + common->cdrom_nluns;
 		common->luns = common->luns_all;
 	} else {
 		common->nluns = common->cdrom_nluns;

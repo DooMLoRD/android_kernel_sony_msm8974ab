@@ -20,8 +20,9 @@
 
 static irqreturn_t mhl_irq_handler(int irq, void *data)
 {
-	pr_debug("%s:irq : %d\n", __func__, irq);
-	mhl_device_isr ();
+	pr_info("\n");
+	pr_info("***** Got INTR(irq:%d) *****\n", irq);
+	mhl_device_isr();
 	return  IRQ_HANDLED;
 }
 

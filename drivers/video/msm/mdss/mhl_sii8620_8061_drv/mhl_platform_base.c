@@ -51,6 +51,8 @@ enum gpio_direction_types {
 	GPIO_INPUT
 };
 
+extern int qpnp_chg_notify_mhl_state(int state);
+
 static bool mhl_pf_is_switch_to_usb(void)
 {
 	if ((gpio_get_value(GPIO_MHL_SWITCH_SEL_1) == 0) &&
@@ -110,7 +112,7 @@ EXPORT_SYMBOL(mhl_pf_get_mhl_clk);
  */
 int mhl_pf_switch_to_usb(void)
 {
-	pr_info("%s:", __func__);
+	pr_debug("%s:", __func__);
 	isDiscoveryCalled = false;
 
 	if (mhl_pf_is_switch_to_usb())
@@ -167,14 +169,17 @@ void mhl_pf_switch_register_cb(int (*device_discovery)(void *context),
 {
 	int rc = MHL_USB_NON_INUSE;
 
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 	device_discovery_cb = device_discovery;
 	context_cb = context;
 	if (isDiscoveryCalled) {
 		rc = device_discovery_cb(context_cb);
 		if (rc == MHL_USB_INUSE) {
-			if (notify_usb_online)
+			if (notify_usb_online) {
+				/* Found MHL device */
+				qpnp_chg_notify_mhl_state(1);
 				notify_usb_online(usb_ctx, 1);
+			}
 		}
 	}
 
@@ -208,7 +213,7 @@ static int mhl_pf_switch_device_discovery(void *data,
 
 	if (id) {
 		/* todo : this logic can be reused in 8620? */
-		pr_debug("%s: USB ID pin high. id=%d\n", __func__, id);
+		pr_warn("%s: USB ID pin high. id=%d\n", __func__, id);
 		return id;
 	}
 
@@ -237,8 +242,11 @@ static int mhl_pf_switch_device_discovery(void *data,
 	if (device_discovery_cb) {
 		rc = device_discovery_cb(context_cb);
 		if (rc == MHL_USB_INUSE) {
-			if (notify_usb_online)
+			if (notify_usb_online) {
+				/* Found MHL device */
+				qpnp_chg_notify_mhl_state(1);
 				notify_usb_online(usb_ctx, 1);
+			}
 		}
 	} else {
 		/*
@@ -253,7 +261,7 @@ static int mhl_pf_switch_device_discovery(void *data,
 		rc = MHL_USB_INUSE;
 	}
 
-	pr_info("%s: mhl is inuse ? : %d\n", __func__, (rc == MHL_USB_INUSE));
+	pr_debug("%s: mhl is inuse ? : %d\n", __func__, (rc == MHL_USB_INUSE));
 
 
 	return rc;
@@ -463,7 +471,7 @@ static int mhl_i2c_probe(struct i2c_client *client,
 {
 	int rc = 0;
 
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 
 	mhl_info = NULL;
 	isDiscoveryCalled = false;
@@ -513,7 +521,7 @@ failed_probe:
 
 static int mhl_i2c_remove(struct i2c_client *client)
 {
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 
 	/*
 	 * All gpio will be released. All release needing gpio

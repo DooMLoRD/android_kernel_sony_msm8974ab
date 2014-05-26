@@ -12,6 +12,7 @@
  */
 
 &mdss_mdp {
+	qcom,mdss-ib-factor = <19 10>;
 	dsi_renesas_sharp_1080_vid: somc,renesas_sharp_1080p_panel {
 		qcom,mdss-dsi-panel-name = "sharp renesas 1080p video";
 		qcom,mdss-dsi-panel-controller = <&mdss_dsi0>;

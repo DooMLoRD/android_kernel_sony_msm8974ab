@@ -151,11 +151,11 @@
 #define	FLASH_SELFCHECK_ENABLE		0x80
 #define FLASH_RAMP_STEP_27US		0xBF
 
-#define FLASH_STROBE_SW			0xC0
-#define FLASH_STROBE_HW			0x04
+#define FLASH_HW_SW_STROBE_SEL_MASK	0x04
 #define FLASH_STROBE_MASK		0xC7
 #define FLASH_LED_0_OUTPUT		0x80
 #define FLASH_LED_1_OUTPUT		0x40
+#define FLASH_TORCH_OUTPUT		0xC0
 
 #define FLASH_CURRENT_PRGM_MIN		1
 #define FLASH_CURRENT_PRGM_SHIFT	1
@@ -355,6 +355,8 @@ struct pwm_config_data {
 	bool blinking;
 };
 
+#define FULL_SCALE_CURR_SEG_MAX 4
+
 /**
  *  wled_config_data - wled configuration data
  *  @num_strings - number of wled strings to be configured
@@ -381,6 +383,11 @@ struct wled_config_data {
 	bool	dig_mod_gen_en;
 	bool	cs_out_en;
 	u8	cabc_en;
+	struct full_scale_seg {
+		u16	threshold;
+		u8	curr;
+		u8	coef;
+	} full_scale_seg[FULL_SCALE_CURR_SEG_MAX];
 };
 
 /**
@@ -598,6 +605,9 @@ static int qpnp_wled_sync(struct qpnp_led_data *led)
 
 static int qpnp_wled_set(struct qpnp_led_data *led)
 {
+	static u8 full_scale_seg_idx = FULL_SCALE_CURR_SEG_MAX - 1;
+	const struct full_scale_seg *const segment
+						= led->wled_cfg->full_scale_seg;
 	int rc, duty, level, tries = 0;
 	u8 val, i, num_wled_strings, sink_val, ilim_val, ovp_val;
 
@@ -608,6 +618,7 @@ static int qpnp_wled_set(struct qpnp_led_data *led)
 	if (level > WLED_MAX_LEVEL)
 		level = WLED_MAX_LEVEL;
 	if (level == 0) {
+		const u8 max_current = segment[full_scale_seg_idx].curr;
 		for (i = 0; i < num_wled_strings; i++) {
 			rc = qpnp_led_masked_write(led,
 				WLED_FULL_SCALE_REG(led->base, i),
@@ -730,7 +741,7 @@ static int qpnp_wled_set(struct qpnp_led_data *led)
 		for (i = 0; i < num_wled_strings; i++) {
 			rc = qpnp_led_masked_write(led,
 				WLED_FULL_SCALE_REG(led->base, i),
-				WLED_MAX_CURR_MASK, led->max_current);
+				WLED_MAX_CURR_MASK, max_current);
 			if (rc) {
 				dev_err(&led->spmi_dev->dev,
 					"Write max current failure (%d)\n",
@@ -785,6 +796,29 @@ static int qpnp_wled_set(struct qpnp_led_data *led)
 		}
 
 	} else {
+		u8 idx = 0;
+		for (i = 0; i < FULL_SCALE_CURR_SEG_MAX; ++i) {
+			if (level <= segment[i].threshold) {
+				idx = i;
+				break;
+			}
+		}
+		if (full_scale_seg_idx != idx) {
+			const u8 max_current = segment[idx].curr;
+			for (i = 0; i < num_wled_strings; ++i) {
+				rc = qpnp_led_masked_write(led,
+					WLED_FULL_SCALE_REG(led->base, i),
+					WLED_MAX_CURR_MASK, max_current);
+				if (rc) {
+					dev_err(&led->spmi_dev->dev,
+					"Write full-scale reg failed (%d)\n",
+					rc);
+					return rc;
+				}
+			}
+			full_scale_seg_idx = idx;
+		}
+		level *= segment[full_scale_seg_idx].coef;
 		val = WLED_BOOST_ON;
 		rc = spmi_ext_register_writel(led->spmi_dev->ctrl,
 			led->spmi_dev->sid, WLED_MOD_CTRL_REG(led->base),
@@ -1134,6 +1168,13 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 				goto error_reg_write;
 			}
 
+			if (!led->flash_cfg->strobe_type)
+				led->flash_cfg->trigger_flash &=
+						~FLASH_HW_SW_STROBE_SEL_MASK;
+			else
+				led->flash_cfg->trigger_flash |=
+						FLASH_HW_SW_STROBE_SEL_MASK;
+
 			rc = qpnp_led_masked_write(led,
 				FLASH_LED_STROBE_CTRL(led->base),
 				led->flash_cfg->trigger_flash,
@@ -1213,30 +1254,22 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 			 */
 			usleep(FLASH_RAMP_UP_DELAY_US);
 
-			if (!led->flash_cfg->strobe_type) {
-				rc = qpnp_led_masked_write(led,
-					FLASH_LED_STROBE_CTRL(led->base),
-					led->flash_cfg->trigger_flash,
-					led->flash_cfg->trigger_flash);
-				if (rc) {
-					dev_err(&led->spmi_dev->dev,
-					"LED %d strobe reg write failed(%d)\n",
-					led->id, rc);
-					goto error_flash_set;
-				}
-			} else {
-				rc = qpnp_led_masked_write(led,
-					FLASH_LED_STROBE_CTRL(led->base),
-					(led->flash_cfg->trigger_flash |
-					FLASH_STROBE_HW),
-					(led->flash_cfg->trigger_flash |
-					FLASH_STROBE_HW));
-				if (rc) {
-					dev_err(&led->spmi_dev->dev,
-					"LED %d strobe reg write failed(%d)\n",
-					led->id, rc);
-					goto error_flash_set;
-				}
+			if (!led->flash_cfg->strobe_type)
+				led->flash_cfg->trigger_flash &=
+						~FLASH_HW_SW_STROBE_SEL_MASK;
+			else
+				led->flash_cfg->trigger_flash |=
+						FLASH_HW_SW_STROBE_SEL_MASK;
+
+			rc = qpnp_led_masked_write(led,
+				FLASH_LED_STROBE_CTRL(led->base),
+				led->flash_cfg->trigger_flash,
+				led->flash_cfg->trigger_flash);
+			if (rc) {
+				dev_err(&led->spmi_dev->dev,
+				"LED %d strobe reg write failed(%d)\n",
+				led->id, rc);
+				goto error_flash_set;
 			}
 		}
 	} else {
@@ -1875,9 +1908,50 @@ exit:
 	return ret;
 }
 
+static ssize_t qpnp_wled_seg_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct qpnp_led_data *led;
+	const struct full_scale_seg *seg;
+	ssize_t i, len = 0;
+
+	led = container_of(led_cdev, struct qpnp_led_data, cdev);
+	seg = led->wled_cfg->full_scale_seg;
+	for (i = 0; i < FULL_SCALE_CURR_SEG_MAX; ++i)
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+			"[%d] threshold = %4d, curr = %2d, coef = %2d\n",
+			i, seg[i].threshold, seg[i].curr, seg[i].coef);
+	return len;
+}
+
+static ssize_t qpnp_wled_seg_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret = count;
+	int idx, threshold, curr, coef;
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct qpnp_led_data *led;
+	struct full_scale_seg *seg;
+	const int coef_max = 255;
+
+	led = container_of(led_cdev, struct qpnp_led_data, cdev);
+	seg = led->wled_cfg->full_scale_seg;
+	ret = sscanf(buf, "%d,%d,%d,%d", &idx, &threshold, &curr, &coef);
+	idx %= FULL_SCALE_CURR_SEG_MAX;
+	seg[idx].threshold = (threshold %= (WLED_MAX_LEVEL + 1));
+	seg[idx].curr = (curr %= (WLED_MAX_CURR + 1));
+	seg[idx].coef = (coef %= (coef_max + 1));
+	dev_dbg(dev, "idx = %u, threshold = %u, curr = %u, coef = %u\n",
+				idx, threshold, curr, coef);
+	return count;
+}
+
 static struct device_attribute cabc_attrs[] = {
 	__ATTR(cabc, S_IRUGO|S_IWUSR|S_IWGRP,
 				qpnp_wled_cabc_show, qpnp_wled_cabc_store),
+	__ATTR(seg, S_IRUGO|S_IWUSR|S_IWGRP,
+				qpnp_wled_seg_show, qpnp_wled_seg_store),
 	__ATTR_NULL,
 };
 
@@ -3212,6 +3286,46 @@ static int __devinit qpnp_get_common_configs(struct qpnp_led_data *led,
 	return 0;
 }
 
+static void __devinit qpnp_get_config_segment_switch(struct qpnp_led_data *led,
+		struct device_node *node)
+{
+	int rc;
+	unsigned tmp_data;
+	unsigned i, read_cnt = 0;
+	struct device_node *temp = NULL;
+	struct device *const dev = &led->spmi_dev->dev;
+	struct full_scale_seg *const segment = led->wled_cfg->full_scale_seg;
+
+	for_each_child_of_node(node, temp) {
+		if (read_cnt >= FULL_SCALE_CURR_SEG_MAX - 1)
+			break;
+		rc = of_property_read_u32(temp, "threshold", &tmp_data);
+		if (rc) {
+			dev_err(dev, "Failure read threshold, rc = %d\n", rc);
+			continue;
+		}
+		segment[read_cnt].threshold = tmp_data % (WLED_MAX_LEVEL + 1);
+		rc = of_property_read_u32(temp, "curr", &tmp_data);
+		if (rc) {
+			dev_err(dev, "Failure read curr, rc = %d\n", rc);
+			continue;
+		}
+		segment[read_cnt].curr = tmp_data % (led->max_current + 1);
+		rc = of_property_read_u32(temp, "coef", &tmp_data);
+		if (rc) {
+			dev_err(dev, "Failure read coef, rc = %d\n", rc);
+			continue;
+		}
+		segment[read_cnt].coef = tmp_data;
+		++read_cnt;
+	}
+	for (i = read_cnt; i < FULL_SCALE_CURR_SEG_MAX; ++i) {
+		segment[i].threshold = WLED_MAX_LEVEL;
+		segment[i].curr = led->max_current;
+		segment[i].coef = 1;
+	}
+}
+
 /*
  * Handlers for alternative sources of platform_data
  */
@@ -3299,6 +3413,8 @@ static int __devinit qpnp_get_config_wled(struct qpnp_led_data *led,
 
 	rc = of_property_read_u32(node, "qcom,cabc-en", &val);
 	led->wled_cfg->cabc_en = !rc ? val : 0;
+
+	qpnp_get_config_segment_switch(led, node);
 
 	return 0;
 }
@@ -3394,7 +3510,7 @@ static int __devinit qpnp_get_config_flash(struct qpnp_led_data *led,
 			led->flash_cfg->enable_module = FLASH_ENABLE_MODULE;
 		} else
 			led->flash_cfg->enable_module = FLASH_ENABLE_ALL;
-		led->flash_cfg->trigger_flash = FLASH_STROBE_SW;
+		led->flash_cfg->trigger_flash = FLASH_TORCH_OUTPUT;
 	}
 
 	rc = of_property_read_u32(node, "qcom,current", &val);

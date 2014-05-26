@@ -883,6 +883,14 @@ config USB_ANDROID_GG
 	  Enabling this option adds GordonsGate support to the
 	  android gadget.
 
+config USB_AUTO_CDROM_EJECTION
+	boolean "Auto Cdrom Ejection"
+	depends on USB_G_ANDROID
+	default n
+	help
+	  This feature provides a automatic cdrom ejection. If multiple cdrom
+	  lun exists, this feature works at only first cdrom lun.
+
 config USB_CDC_COMPOSITE
 	tristate "CDC Composite Device (Ethernet and ACM)"
 	depends on NET
