@@ -80,6 +80,8 @@
 #define MSM_MMC_BUS_VOTING_DELAY	200 /* msecs */
 #define INVALID_TUNING_PHASE		-1
 
+#define MSM_SDCC_PM_QOS_TIMEOUT		10000 /* usecs */
+
 #define MMC_SDCC3_SLOT_NUMBER		3
 
 #if defined(CONFIG_DEBUG_FS)
@@ -202,8 +204,9 @@ static void msmsdcc_pm_qos_update_latency(struct msmsdcc_host *host, int vote)
 		pm_qos_update_request(&host->pm_qos_req_dma,
 				host->cpu_dma_latency);
 	else
-		pm_qos_update_request(&host->pm_qos_req_dma,
-					PM_QOS_DEFAULT_VALUE);
+		pm_qos_update_request_timeout(&host->pm_qos_req_dma,
+				host->cpu_dma_latency,
+				MSM_SDCC_PM_QOS_TIMEOUT);
 }
 
 #ifdef CONFIG_MMC_MSM_SPS_SUPPORT

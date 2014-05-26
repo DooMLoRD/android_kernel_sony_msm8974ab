@@ -189,6 +189,7 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(resistance),
 	POWER_SUPPLY_ATTR(enable_shutdown_at_low_battery),
 	POWER_SUPPLY_ATTR(batt_aging),
+	POWER_SUPPLY_ATTR(enable_llk),
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(model_name),
 	POWER_SUPPLY_ATTR(manufacturer),

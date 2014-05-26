@@ -454,6 +454,7 @@ struct vfe_device {
 	uint8_t vt_enable;
 	void __iomem *p_avtimer_msw;
 	void __iomem *p_avtimer_lsw;
+	uint8_t ignore_error;
 #if defined(CONFIG_SONY_CAM_V4L2)
 	int timeout;
 #endif

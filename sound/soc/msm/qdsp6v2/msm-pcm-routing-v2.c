@@ -76,6 +76,7 @@ static int lsm_mux_slim_port;
 static int slim0_rx_aanc_fb_port;
 static int msm_route_ec_ref_rx = 3; /* NONE */
 static uint32_t voc_session_id = ALL_SESSION_VSID;
+static int audio_ec_ref_port_id = AFE_PORT_INVALID;
 static int msm_route_ext_ec_ref = AFE_PORT_INVALID;
 
 enum {
@@ -155,12 +156,12 @@ static void msm_send_eq_values(int eq_idx);
  * If new back-end is defined, add new back-end DAI ID at the end of enum
  */
 
-
+#define SRS_TRUMEDIA_INDEX 2
 union srs_trumedia_params_u {
 	struct srs_trumedia_params srs_params;
 	unsigned short int raw_params[1];
 };
-static union srs_trumedia_params_u msm_srs_trumedia_params[2];
+static union srs_trumedia_params_u msm_srs_trumedia_params[SRS_TRUMEDIA_INDEX];
 static int srs_port_id = -1;
 
 static void srs_send_params(int port_id, unsigned int techs,
@@ -431,7 +432,7 @@ void msm_pcm_routing_reg_phy_stream(int fedai_id, int perf_mode,
 				path_type,
 				msm_bedais[i].sample_rate,
 				msm_bedais[i].channel,
-				topology, false,
+				topology, perf_mode,
 				bits_per_sample);
 
 			payload.copp_ids[payload.num_copps++] =
@@ -1188,7 +1189,7 @@ static int msm_routing_set_srs_trumedia_control_(struct snd_kcontrol *kcontrol,
 			SRS_PARAM_OFFSET_MASK) >> 16);
 	value = (unsigned short)(ucontrol->value.integer.value[0] &
 			SRS_PARAM_VALUE_MASK);
-	if (offset < max) {
+	if ((offset < max) && (index < SRS_TRUMEDIA_INDEX)) {
 		msm_srs_trumedia_params[index].raw_params[offset] = value;
 		pr_debug("SRS %s: index set... (max %d, requested %d, val %d, paramblockidx %d)",
 			__func__, max, offset, value, index);
@@ -1486,6 +1487,76 @@ static int msm_routing_ext_ec_put(struct snd_kcontrol *kcontrol,
 	}
 	return ret;
 }
+
+static const char *const audio_ec_ref_rx[] = { "SLIM_RX", "I2S_RX", "PROXY_RX",
+	"PRI_MI2S_TX", "SEC_MI2S_TX", "TERT_MI2S_TX", "QUAT_MI2S_TX", "NONE"};
+static const struct soc_enum msm_route_audio_ec_ref_rx_enum[] = {
+	SOC_ENUM_SINGLE_EXT(8, audio_ec_ref_rx),
+};
+
+
+static int msm_routing_audio_ext_ec_get(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+
+
+	mutex_lock(&routing_lock);
+	ucontrol->value.integer.value[0] = audio_ec_ref_port_id ;
+	mutex_unlock(&routing_lock);
+	return 0;
+}
+
+static int msm_routing_audio_ext_ec_put(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dapm_widget_list *wlist = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_dapm_widget *widget = wlist->widgets[0];
+	int mux = ucontrol->value.enumerated.item[0];
+	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
+	int ret = 0;
+
+	mutex_lock(&routing_lock);
+	switch (ucontrol->value.integer.value[0]) {
+
+	case 0:
+		audio_ec_ref_port_id = SLIMBUS_0_RX;
+		break;
+	case 1:
+		audio_ec_ref_port_id = AFE_PORT_ID_PRIMARY_MI2S_RX;
+		break;
+	case 2:
+		audio_ec_ref_port_id = AFE_PORT_INVALID;
+		break;
+	case 3:
+		audio_ec_ref_port_id = AFE_PORT_ID_PRIMARY_MI2S_TX;
+		break;
+	case 4:
+		audio_ec_ref_port_id = AFE_PORT_ID_SECONDARY_MI2S_TX;
+		break;
+	case 5:
+		audio_ec_ref_port_id = AFE_PORT_ID_TERTIARY_MI2S_TX;
+		break;
+	case 6:
+		audio_ec_ref_port_id = AFE_PORT_ID_QUATERNARY_MI2S_TX;
+		break;
+	default:
+		audio_ec_ref_port_id = AFE_PORT_INVALID;
+		break;
+	}
+	pr_info("%s: audio_ec_ref_port_id = %d\n",
+			__func__, audio_ec_ref_port_id);
+
+	adm_ec_ref_rx_id(audio_ec_ref_port_id);
+	mutex_unlock(&routing_lock);
+	snd_soc_dapm_mux_update_power(widget, kcontrol, 1, mux, e);
+	return ret;
+}
+
+static const struct snd_kcontrol_new audio_ext_ec_mux =
+	SOC_DAPM_ENUM_EXT("AUDIO_EXT_EC MUX Mux",
+			msm_route_audio_ec_ref_rx_enum[0],
+			msm_routing_audio_ext_ec_get,
+			msm_routing_audio_ext_ec_put);
 
 static const char * const ext_ec_ref_rx[] = {"NONE", "PRI_MI2S_TX",
 					     "SEC_MI2S_TX", "TERT_MI2S_TX",
@@ -3879,7 +3950,8 @@ static const struct snd_soc_dapm_widget msm_qdsp6_widgets[] = {
 	/* Virtual Pins to force backends ON atm */
 	SND_SOC_DAPM_OUTPUT("BE_OUT"),
 	SND_SOC_DAPM_INPUT("BE_IN"),
-
+	SND_SOC_DAPM_MUX("AUDIO_EXT_EC MUX", SND_SOC_NOPM, 0, 0,
+			 &audio_ext_ec_mux),
 	SND_SOC_DAPM_MUX("SLIM0_RX_VI_FB_LCH_MUX", SND_SOC_NOPM, 0, 0,
 				&slim0_rx_vi_fb_lch_mux),
 	SND_SOC_DAPM_MUX("VOC_EXT_EC MUX", SND_SOC_NOPM, 0, 0,
@@ -4204,6 +4276,12 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"CS-VOICE_UL1", NULL, "VOC_EXT_EC MUX"},
 	{"VOIP_UL", NULL, "VOC_EXT_EC MUX"},
 	{"VoLTE_UL", NULL, "VOC_EXT_EC MUX"},
+
+	{"AUDIO_EXT_EC MUX", "PRI_MI2S_TX" , "PRI_MI2S_TX"},
+	{"AUDIO_EXT_EC MUX", "SEC_MI2S_TX" , "SEC_MI2S_TX"},
+	{"AUDIO_EXT_EC MUX", "TERT_MI2S_TX" , "TERT_MI2S_TX"},
+	{"AUDIO_EXT_EC MUX", "QUAT_MI2S_TX" , "QUAT_MI2S_TX"},
+	{"MM_UL1", NULL, "AUDIO_EXT_EC MUX"},
 
 	{"Voice_Tx Mixer", "PRI_TX_Voice", "PRI_I2S_TX"},
 	{"Voice_Tx Mixer", "PRI_MI2S_TX_Voice", "PRI_MI2S_TX"},
@@ -4669,7 +4747,7 @@ static int msm_pcm_routing_prepare(struct snd_pcm_substream *substream)
 				path_type,
 				bedai->sample_rate,
 				channels,
-				topology, false,
+				topology, fe_dai_perf_mode[i][session_type],
 				bits_per_sample);
 			}
 

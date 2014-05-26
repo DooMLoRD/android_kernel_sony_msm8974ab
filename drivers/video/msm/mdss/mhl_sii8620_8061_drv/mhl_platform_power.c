@@ -32,7 +32,7 @@
 #define CURRENT_2000MA			2000000
 
 /* VMIN */
-#define VMIN_MHL				4600000
+#define VMIN_MHL				4300000
 
 static	bool vbus_active;
 static	int	 mhl_mode;
@@ -141,7 +141,7 @@ static int mhl_platform_power_debug_init(struct device *dev)
 {
 	int rc = -1;
 
-	pr_info("%s: called\n", __func__);
+	pr_debug("%s: called\n", __func__);
 
 	dev->class = class_create(THIS_MODULE, "mhl_power");
 	if (IS_ERR(dev->class)) {
@@ -178,7 +178,7 @@ static int mhl_platform_power_debug_init(struct device *dev)
 
 static void mhl_platform_power_debug_release(struct device *dev)
 {
-	pr_info("%s: called\n", __func__);
+	pr_debug("%s: called\n", __func__);
 
 	device_remove_file(dev, &dev_attr_charge_mhlver);
 	device_remove_file(dev, &dev_attr_charge_devcap);
@@ -213,7 +213,7 @@ static int mhl_power_get_property(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  union power_supply_propval *val)
 {
-	pr_info("%s: called. psp=0x%x\n", __func__, psp);
+	pr_debug("%s: called. psp=0x%x\n", __func__, psp);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -235,7 +235,7 @@ static int mhl_power_set_property(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  const union power_supply_propval *val)
 {
-	pr_info("%s: called. psp=0x%x\n", __func__, psp);
+	pr_debug("%s: called. psp=0x%x\n", __func__, psp);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_PRESENT:
@@ -292,7 +292,7 @@ static int mhl_power_set_property(struct power_supply *psy,
 static int mhl_power_property_is_writeable(struct power_supply *psy,
 					   enum power_supply_property psp)
 {
-	pr_info("%s: called. psp=0x%x\n", __func__, psp);
+	pr_debug("%s: called. psp=0x%x\n", __func__, psp);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
@@ -308,7 +308,7 @@ static int __init mhl_platform_power_init(void)
 {
 	int ret = 0;
 
-	pr_info("%s: called\n", __func__);
+	pr_debug("%s: called\n", __func__);
 
 	current_val = 0;
 	vbus_active = false;
@@ -361,7 +361,7 @@ failed_error:
 
 static void __exit mhl_platform_power_exit(void)
 {
-	pr_info("%s: called\n", __func__);
+	pr_debug("%s: called\n", __func__);
 
 	current_val = 0;
 	vbus_active = false;
@@ -383,26 +383,11 @@ static void __exit mhl_platform_power_exit(void)
 
 void mhl_platform_power_stop_charge(void)
 {
-	union power_supply_propval vmin;
-
-	/* VMIN change to DEFAULT value */
-	if (batt_psy) {
-		batt_psy->get_property(batt_psy,
-			POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
-			&vmin);
-
-		batt_psy->set_property(batt_psy,
-			POWER_SUPPLY_PROP_VOLTAGE_MIN,
-			&vmin);
-		pr_info("%s: vmin.intval=%x\n",
-			__func__, vmin.intval);
-	}
-
 	current_val = 0;
 	max_current_val = 0;
 	max_current = 0;
 	mhl_mode = 0;
-	pr_info("%s: max_current=%d\n", __func__, max_current);
+	pr_debug("%s: max_current=%d\n", __func__, max_current);
 	power_supply_changed(&mhl_psy);
 }
 EXPORT_SYMBOL(mhl_platform_power_stop_charge);
@@ -413,11 +398,10 @@ int mhl_platform_power_start_charge(char *devcap)
 	int dev_type;
 	int pow;
 	int plim;
-	union power_supply_propval vmin;
 	union power_supply_propval current_temp;
 	int rty_cnt;
 
-	pr_info("%s: called\n", __func__);
+	pr_debug("%s: called\n", __func__);
 
 	/* pre discovery */
 	if (!devcap) {
@@ -432,20 +416,10 @@ int mhl_platform_power_start_charge(char *devcap)
 				batt_psy = power_supply_get_by_name("battery");
 				if (batt_psy)
 					break;
-				pr_info("%s:try to get battery instance again %x",
+				pr_warn("%s:try to get battery instance again %x",
 					__func__, rty_cnt);
 				msleep(100);
 			}
-		}
-
-		/*  VMIN change to MHL Spec value */
-		if (batt_psy) {
-			vmin.intval = VMIN_MHL;
-			batt_psy->set_property(batt_psy,
-				POWER_SUPPLY_PROP_VOLTAGE_MIN,
-				&vmin);
-				pr_info("%s: vmin.intval=%x\n",
-					__func__, vmin.intval);
 		}
 
 		max_current_val = CURRENT_500MA;
@@ -469,17 +443,17 @@ int mhl_platform_power_start_charge(char *devcap)
 	plim = devcap[DEVCAP_OFFSET_DEV_CAT] &
 		MHL_DEV_CATEGORY_MASK_PLIM;
 
-	pr_info("%s:MHL_VERSION=0x%x DEV_CAT=0x%x\n",
+	pr_debug("%s: MHL_VERSION=0x%x DEV_CAT=0x%x\n",
 				__func__, devcap[DEVCAP_OFFSET_MHL_VERSION],
 				devcap[DEVCAP_OFFSET_DEV_CAT]);
-	pr_info("%s:mhl_version=0x%x dev_type=0x%x pow=0x%x plim=0x%x\n",
+	pr_debug("%s: mhl_version=0x%x dev_type=0x%x pow=0x%x plim=0x%x\n",
 				__func__, mhl_version, dev_type, pow, plim);
 
 	/* check POW */
 	if (pow == MHL_DEV_CATEGORY_POW_BIT) {
 		/* check MHL ver */
 		if (mhl_version == MHL_DEV_MHL_VER_10) {
-			pr_info("%s: mhl ver=1.0\n", __func__);
+			pr_debug("%s: mhl ver=1.0\n", __func__);
 			/* check device type */
 			if ((dev_type == MHL_DEV_CAT_DONGLE) ||
 				(dev_type == MHL_DEV_CAT_SINK)) {
@@ -489,7 +463,7 @@ int mhl_platform_power_start_charge(char *devcap)
 			} else
 				return -EINVAL;
 		} else {
-			pr_info("%s: mhl ver >= 2\n", __func__);
+			pr_debug("%s: mhl ver >= 2\n", __func__);
 
 			/* check PLIM */
 			if (plim == MHL_DEV_CAT_PLIM_500) {
@@ -508,7 +482,7 @@ int mhl_platform_power_start_charge(char *devcap)
 
 				/* check device type(Direct Attach) */
 				if (dev_type == MHL_DEV_CAT_DIRECT_SINK) {
-					pr_info("%s:dev type =Direct Attach\n",
+					pr_debug("%s:dev type =Direct Attach\n",
 								__func__);
 					/* Though MHL spec says
 					that the device can offer 2000 mA
@@ -519,7 +493,7 @@ int mhl_platform_power_start_charge(char *devcap)
 					pr_info("%s: max_current=1500mA\n",
 								__func__);
 				} else {
-					pr_info("%s:dev type =other\n",
+					pr_debug("%s:dev type =other\n",
 								__func__);
 					max_current = CURRENT_1500MA;
 					pr_info("%s: max_current=1500mA\n",
@@ -536,7 +510,7 @@ int mhl_platform_power_start_charge(char *devcap)
 		POWER_SUPPLY_PROP_CURRENT_MAX,
 		&current_temp);
 
-	pr_info("%s: max_current=%d\n", __func__, max_current);
+	pr_debug("%s: max_current=%d\n", __func__, max_current);
 
 	return 0;
 }

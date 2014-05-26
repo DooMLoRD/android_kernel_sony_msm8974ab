@@ -54,15 +54,15 @@ enum {
 #define PRINT_DATA(_data, _count, _string) \
 	{ \
 		int i; \
-		pr_info("-----%s(): %s-----\n", __func__, _string);\
+		pr_debug("-----%s(): %s-----\n", __func__, _string);\
 		for(i = 0; i<_count; i++){ \
-			pr_info("0x%02x ", _data[i]); \
+			pr_debug("0x%02x ", _data[i]); \
 			if ((i+1) %16 == 0) \
-				pr_info("\n"); \
+				pr_debug("\n"); \
 			if (i == _count - 1) \
-				pr_info("\n"); \
+				pr_debug("\n"); \
 		} \
-		pr_info("-----\n"); \
+		pr_debug("-----\n"); \
 	}
 #else
 #define PRINT_DATA(_data, _count, _string)
@@ -131,18 +131,18 @@ bool mhl_edid_check_edid_header(uint8_t *pSingleEdidBlock)
 	uint8_t last_00 = EDID_OFFSET_HEADER_LAST_00;
 
 	if (0x00 != pSingleEdidBlock[first_00]) {
-		pr_info("%s: no offset header first\n", __func__);
+		pr_debug("%s: no offset header first\n", __func__);
 		return false;
 	}
 
 	for (i = first_ff; i <= last_ff; i++)
 		if (0xFF != pSingleEdidBlock[i]) {
-			pr_info("%s: no ff\n", __func__);
+			pr_debug("%s: no ff\n", __func__);
 			return false;
 		}
 
 	if (0x00 != pSingleEdidBlock[last_00]) {
-		pr_info("%s: no offset header last\n", __func__);
+		pr_debug("%s: no offset header last\n", __func__);
 		return false;
 	}
 
@@ -257,7 +257,7 @@ int mhl_edid_parser_remove_vic16_1080p60fps(uint8_t *ext_edid)
     new_svd_size = db_len;
 
 	if (db_header == NULL) {
-		pr_info("%s: no video data block\n", __func__);
+		pr_debug("%s: no video data block\n", __func__);
 		return MHL_SUCCESS;
 	}
 
@@ -803,10 +803,10 @@ static int mhl_lib_edid_pull_up_and_padding(
 #ifdef DEBUG_PRINT_EDID_LIB
 		{
 			int j;
-			pr_info(" ---- pull up ----\n");
+			pr_debug(" ---- pull up ----\n");
 			for (j = 0; j < data_size; j++)
-				pr_info("0x%02x, ", *(org_head + j));
-			pr_info("\n");
+				pr_debug("0x%02x, ", *(org_head + j));
+			pr_debug("\n");
 		}
 #endif
 	}
@@ -912,7 +912,7 @@ static const uint8_t *hdmi_edid_find_block_v2(
 		u8 block_len = in_buf[offset] & 0x1F;
 		if ((in_buf[offset] >> 5) == type) {
 			*len = block_len;
-			pr_info("%s: EDID: type=%d found @ 0x%x w/ len=%d\n",
+			pr_debug("%s: EDID: type=%d found @ 0x%x w/ len=%d\n",
 				__func__, type, offset, block_len);
 
 			if (--target_db_num <= 0)
@@ -920,7 +920,7 @@ static const uint8_t *hdmi_edid_find_block_v2(
 		}
 		offset += (uint8_t)(1 + block_len);
 	}
-	pr_warn("%s: EDID: type=%d block not found in EDID block\n",
+	pr_debug("%s: EDID: type=%d block not found in EDID block\n",
 		__func__, type);
 
 	return NULL;
@@ -1049,7 +1049,7 @@ void mhl_lib_edid_remove_standard_timing(
 		if (!is_support) {
 			if (*(std_timing + offset) != 0x01 &&
 				 *(std_timing + offset + 1) != 0x01)
-				pr_info("%s:removed 0x%2x, 0x%2x\n",
+				pr_debug("%s:removed 0x%2x, 0x%2x\n",
 				 __func__,
 				 *(std_timing + offset),
 				 *(std_timing + offset + 1));
@@ -1159,7 +1159,7 @@ bool mhl_lib_edid_is_supp_disp_info_in_one_dtd_blk(
 	u32 disp_mode = 0;
 	hdmi_edid_detail_desc(one_descriptor, &disp_mode, edid, mode_lut_len, preferd_disp_index);
 
-	pr_info("%s:disp_mode = %d (0x%x)\n", __func__, disp_mode, disp_mode);
+	pr_debug("%s:disp_mode = %d (0x%x)\n", __func__, disp_mode, disp_mode);
 
 	if (disp_mode != HDMI_VFRMT_FORCE_32BIT)
 		return true;
@@ -1227,7 +1227,8 @@ void mhl_lib_edid_replace_unsupport_descriptor_with_dummy(
 				blk0[0x36 + desc_offset + 0x03] = 0x10;
 
 			} else {
-				pr_info("%s: supported, cont i : %d \n", __func__, i);
+				pr_debug("%s: supported, cont i : %d\n",
+					__func__, i);
 			}
 		}
 		desc_offset += 0x12;

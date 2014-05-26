@@ -250,7 +250,7 @@ static inline int platform_write_i2c_block(
 
 
 	if (!mhl_pf_is_chip_power_on()) {
-		pr_info("%s:chip power is off\n", __func__);
+		pr_warn("%s:chip power is off\n", __func__);
 		return -MHL_I2C_NOT_AVAILABLE;
 	}
 
@@ -320,7 +320,7 @@ static inline int platform_read_i2c_block(struct i2c_adapter *i2c_bus
 	int				i;
 
 	if (!mhl_pf_is_chip_power_on()) {
-		pr_info("%s:chip power is off\n", __func__);
+		pr_warn("%s:chip power is off\n", __func__);
 		return -MHL_I2C_NOT_AVAILABLE;
 	}
 
@@ -362,8 +362,8 @@ int mhl_pf_read_reg_block(u8 page, u8 offset,
 								, values
 								);
 	if (ret == -MHL_I2C_NOT_AVAILABLE) {
-		pr_info("%s:chip power is off:0x%04x\n", __func__, ret);
-		pr_info("%s:0x%02x:0x%02x\n", __func__, page, offset);
+		pr_warn("%s:chip power is off:0x%04x\n", __func__, ret);
+		pr_warn("%s:0x%02x:0x%02x\n", __func__, page, offset);
 		return ret;
 	} else if (ret != 2) {
 		pr_err("%s:I2c read failed,  0x%02x:0x%02x\n", __func__, page, offset);

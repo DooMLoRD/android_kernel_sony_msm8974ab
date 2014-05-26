@@ -726,7 +726,7 @@
 	qcom,ibatsafe-ma = <3000>;
 	qcom,maxinput-dc-ma = <1800>;
 	qcom,maxinput-dc-mv = <10000>;
-	qcom,maxinput-usb-ma = <1500>;
+	qcom,maxinput-usb-ma = <1800>;
 	qcom,maxinput-usb-mv = <13000>;
 	qcom,thermal-mitigation = <3000 2500 2000 1500 1100 800 500 300 100 0>;
 	qcom,cool-bat-mv = <4350>;
@@ -1474,6 +1474,7 @@
 
 &usb3 {
 	qcom,dwc-hsphy-init = <0x00D0CC27>;
+	current_system_max_limit = <1800>;
 };
 
 &mdss_mdp {

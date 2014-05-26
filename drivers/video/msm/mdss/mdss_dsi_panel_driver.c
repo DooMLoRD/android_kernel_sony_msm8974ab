@@ -1,5 +1,5 @@
 
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  * Copyright (C) 2012-2014 Sony Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -163,8 +163,8 @@ static struct dsi_cmd_desc dcs_read_cmd = {
 	dcs_cmd
 };
 
-u32 mdss_dsi_dcs_read(struct mdss_dsi_ctrl_pdata *ctrl,
-			char cmd0, char cmd1)
+u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
+			char cmd1, void (*fxn)(int), char *rbuf, int len)
 {
 	struct dcs_cmd_req cmdreq;
 
@@ -174,8 +174,9 @@ u32 mdss_dsi_dcs_read(struct mdss_dsi_ctrl_pdata *ctrl,
 	cmdreq.cmds = &dcs_read_cmd;
 	cmdreq.cmds_cnt = 1;
 	cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
-	cmdreq.rlen = 1;
-	cmdreq.cb = NULL; /* call back */
+	cmdreq.rlen = len;
+	cmdreq.rbuf = rbuf;
+	cmdreq.cb = fxn; /* call back */
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 	/*
 	 * blocked here, until call back called
@@ -362,6 +363,15 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
+
+	/*
+	 * Some backlight controllers specify a minimum duty cycle
+	 * for the backlight brightness. If the brightness is less
+	 * than it, the controller can malfunction.
+	 */
+
+	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
+		bl_level = pdata->panel_info.bl_min;
 
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
@@ -1884,10 +1894,10 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			"qcom,mdss-dsi-te-dcs-command", &tmp);
 		pinfo->mipi.insert_dcs_cmd = !rc ? tmp : 1;
 		rc = of_property_read_u32(next,
-			"qcom,mdss-dsi-te-v-sync-continue-lines", &tmp);
+			"qcom,mdss-dsi-wr-mem-continue", &tmp);
 		pinfo->mipi.wr_mem_continue = !rc ? tmp : 0x3c;
 		rc = of_property_read_u32(next,
-			"qcom,mdss-dsi-te-v-sync-rd-ptr-irq-line", &tmp);
+			"qcom,mdss-dsi-wr-mem-start", &tmp);
 		pinfo->mipi.wr_mem_start = !rc ? tmp : 0x2c;
 		rc = of_property_read_u32(next,
 			"qcom,mdss-dsi-te-pin-select", &tmp);
@@ -1896,7 +1906,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			"qcom,mdss-dsi-virtual-channel-id", &tmp);
 		pinfo->mipi.vc = !rc ? tmp : 0;
 		data = of_get_property(next,
-			"mdss-dsi-color-order", NULL);
+			"qcom,mdss-dsi-color-order", NULL);
 		if (data) {
 			if (!strcmp(data, "rgb_swap_rbg"))
 				pinfo->mipi.rgb_swap = DSI_RGB_SWAP_RBG;
@@ -1925,6 +1935,11 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		rc = of_property_read_u32(next,
 			"qcom,mdss-dsi-t-clk-post", &tmp);
 		pinfo->mipi.t_clk_post = !rc ? tmp : 0x03;
+
+		pinfo->mipi.rx_eot_ignore = of_property_read_bool(next,
+			"qcom,mdss-dsi-rx-eot-ignore");
+		pinfo->mipi.tx_eot_append = of_property_read_bool(next,
+			"qcom,mdss-dsi-tx-eot-append");
 
 		rc = of_property_read_u32(next, "qcom,mdss-dsi-stream", &tmp);
 		pinfo->mipi.stream = !rc ? tmp : 0;

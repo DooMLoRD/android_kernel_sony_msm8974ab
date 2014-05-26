@@ -491,7 +491,7 @@ int drive_hpd_low(void)
 	hpd_control_mode mode;
 	int ret_val = -1;
 
-	pr_info("%s()\n",  __func__);
+	pr_debug("%s()\n",  __func__);
 
 	mode = platform_get_hpd_control_mode();
 
@@ -572,17 +572,18 @@ static int int_disc_isr(uint8_t int_disc_status)
 
 	} else if (int_disc_status & BIT_RGND_READY_INT) {
 		int disc_stat2;
-		pr_debug("%s:RGND_READY INT\n", __func__);
+		pr_info("%s:RGND_READY INT\n", __func__);
 
 		disc_stat2 = mhl_pf_read_reg(REG_PAGE_5_DISC_STAT2);
 		pr_debug("%s:RGND impedance register spec:", __func__);
 		pr_debug("0x00 open, 0x01 2k, 0x10 1k, 0x11 Shorted\n");
-		pr_debug("%s:measured impedance : %#x\n", __func__, (disc_stat2 & 0x03));
+		pr_info("%s:measured impedance : %#x\n", __func__,
+			(disc_stat2 & 0x03));
 
 		mhl_reset_states();
 
 		if (0x02 == (disc_stat2 & 0x03)) {
-			pr_info("%s: Cable impedance = 1k (MHL Device)\n",
+			pr_debug("%s: Cable impedance = 1k (MHL Device)\n",
 								__func__);
 			imp_zero_cnt = 0;
 
@@ -651,7 +652,8 @@ static int int_disc_isr(uint8_t int_disc_status)
 					 | BIT_CBUS_MSC_MR_SET_INT
 					 | BIT_CBUS_MSC_MT_DONE_NACK);
 		} else if (0x00 == (disc_stat2 & 0x03)) {
-			pr_info("%s: impedance count=%x\n", __func__, imp_zero_cnt);
+			pr_debug("%s: impedance count=%x\n",
+				__func__, imp_zero_cnt);
 			msleep(50);
 			imp_zero_cnt++;
 			if(imp_zero_cnt > MAX_ZERO_IMP_DISC){
@@ -662,7 +664,7 @@ static int int_disc_isr(uint8_t int_disc_status)
 				return BIT_RGND_READY_INT;
 			}
 		} else {
-			pr_info("%s: Cable impedance != 1k (Not MHL Device)\n",
+			pr_debug("%s: Cable impedance != 1k (Not MHL Device)\n",
 								__func__);
 			chip_power_off();
 		}
@@ -699,7 +701,7 @@ static int mhl_cbus_isr(uint8_t cbus_int)
 	switch(cbus_mode){
 	case CBUS_TRANSITIONAL_TO_eCBUS_S_CALIBRATED:
 	case CBUS_TRANSITIONAL_TO_eCBUS_D_CALIBRATED:
-		pr_debug("%s CBUS1 message received cbus_int:0x%02x\n",
+		pr_warn("%s CBUS1 message received cbus_int:0x%02x\n",
 			 __func__, cbus_int);
 		return -1;
 		break;
@@ -728,38 +730,38 @@ static int mhl_cbus_isr(uint8_t cbus_int)
 
 	if (BIT_CBUS_HPD_CHG & cbus_int) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("[CBUS] got HPD\n\n");
+		pr_info("[CBUS] got HPD\n");
 		mhl_msc_hpd_receive();
 	}
 
 	if (BIT_CBUS_MSC_MT_DONE & cbus_int) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("[CBUS] got ACK for MSC Cmd\n\n");
+		pr_info("[CBUS] got ACK for MSC Cmd\n");
 		mhl_msc_command_done(true);
 	}
 
 	if (BIT_CBUS_MSC_MT_DONE_NACK & cbus_int) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("[CBUS] got NACK for MSC Cmd\n\n");
+		pr_warn("[CBUS] got NACK for MSC Cmd\n");
 		mhl_msc_command_done(false);
 	}
 
 	if (BIT_CBUS_MSC_MR_WRITE_STAT & cbus_int) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("[CBUS] got WRITW_STAT\n\n");
+		pr_info("[CBUS] got WRITE_STAT\n");
 		mhl_msc_write_stat_receive();
 	}
 
 	if ((BIT_CBUS_MSC_MR_MSC_MSG & cbus_int)) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("%s: [CBUS] got MSC_MSG\n\n", __func__);
+		pr_info("[CBUS] got MSC_MSG\n");
 		mhl_msc_msg_receive();
 		mhl_msc_command_done(true);
 	}
 
 	if (BIT_CBUS_MSC_MR_SET_INT & cbus_int) {
 		pr_debug("\n------------------------------------\n");
-		pr_debug("[CBUS] got SET_INT\n\n");
+		pr_info("[CBUS] got SET_INT\n");
 		mhl_msc_set_int_receive();
 	}
 
@@ -769,7 +771,7 @@ static int mhl_cbus_isr(uint8_t cbus_int)
 static int mhl_cbus_err_isr(uint8_t cbus_err_int)
 {
 	if (cbus_err_int & (BIT_CBUS_DDC_ABORT | BIT_CBUS_MSC_ABORT_RCVD |  BIT_CBUS_CMD_ABORT)) {
-		pr_debug("[CBUS] Abort\n\n");
+		pr_err("[CBUS] Abort.\n");
 		mhl_cbus_abort(cbus_err_int);
 	}
 
@@ -782,12 +784,12 @@ static int int_edid_devcap_isr(uint8_t int_edid_devcap_status)
 	mhl_pf_write_reg(REG_PAGE_2_INTR9, int_edid_devcap_status);
 
 	if (BIT_INTR9_DEVCAP_DONE & int_edid_devcap_status) {
-		pr_debug("[CBUS] READ_DEVCAP done\n\n");
+		pr_info("[CBUS] READ_DEVCAP done\n");
 		mhl_msc_command_done(true);
 	}
 	if ((BIT_INTR9_EDID_DONE | BIT_INTR9_EDID_ERROR)
 		& int_edid_devcap_status) {
-		pr_debug("[CBUS] EDID done\n\n");
+		pr_info("[CBUS] EDID done\n");
 		mhl_8620_dev_int_edid_isr(int_edid_devcap_status);
 		mhl_msc_command_done(true);
 	}
@@ -801,7 +803,7 @@ int int_scdt_isr(uint8_t int_scdt_status)
 		temp = mhl_pf_read_reg(REG_PAGE_2_TMDS_CSTAT_P3);
 
 		if (BIT_PAGE_2_TMDS_CSTAT_P3_SCDT & temp) {
-			pr_debug("got SCDT HIGH\n");
+			pr_info("got SCDT HIGH\n");
 
 			/* enable infoframe interrupt */
 			mhl_pf_write_reg(REG_PAGE_0_INTR8_MASK,
@@ -822,7 +824,7 @@ int int_scdt_isr(uint8_t int_scdt_status)
 				start_video();
 			}
 		} else {
-			pr_debug("got SCDT LOW\n");
+			pr_info("got SCDT LOW\n");
 
 			/* Clear all InfoFrame info which is now stale. */
 			mhl_pf_write_reg(REG_PAGE_2_TMDS_CSTAT_P3,
@@ -855,10 +857,10 @@ static int int_info_frame_isr(uint8_t int_info_frame_status)
 	mhl_pf_write_reg(REG_PAGE_0_INTR8, int_info_frame_status);
 
 	/* FIXME hpd_high_callback */
-	
+
 	/* Resolution change interrupt (NEW_AVIF or NEW_VSIF) */
 	if (BIT_INTR8_CEA_NEW_VSI & int_info_frame_status) {
-		pr_debug("got NEW_VSIF\n");
+		pr_info("got NEW_VSIF\n");
 
 		/* Select VSIF */
 		mhl_pf_write_reg(REG_PAGE_2_RX_HDMI_CTRL2,
@@ -872,7 +874,7 @@ static int int_info_frame_isr(uint8_t int_info_frame_status)
 	}
 
 	if (BIT_INTR8_CEA_NEW_AVI & int_info_frame_status) {
-		pr_debug("got NEW_AVIF\n");
+		pr_info("got NEW_AVIF\n");
 
 		/* Select AVIF */
 		mhl_pf_write_reg(REG_PAGE_2_RX_HDMI_CTRL2,
@@ -888,7 +890,7 @@ static int int_info_frame_isr(uint8_t int_info_frame_status)
 			pr_warn("%s: type code is invalid\n", __func__);
 			return int_info_frame_status;
 		} else
-			pr_info("%s: type code is valid\n", __func__);
+			pr_debug("%s: type code is valid\n", __func__);
 	}
 
 	switch (int_info_frame_status &
@@ -1040,6 +1042,8 @@ static int hdcp_isr(uint8_t tpi_int_status)
 		case VAL_TPI_COPP_GPROT_SECURE:
 		case VAL_TPI_COPP_LPROT_SECURE:
 		case (VAL_TPI_COPP_GPROT_SECURE | VAL_TPI_COPP_LPROT_SECURE):
+			pr_info("%s: HDCP1.4 Authentication Done.\n", __func__);
+
 			/* send HDCP PASS uevent */
 			mhl_tx_send_hdcp_state(HDCP_STATE_AUTHENTICATED);
 			unmute_video();
@@ -1094,7 +1098,7 @@ static int hdcp2_isr(uint8_t intr_status)
 	pr_debug("%s: int val: %X\n", __func__, intr_status);
 
 	if (intr_status & BIT_HDCP2_INTR_AUTH_DONE) {
-		pr_debug("%s: HDCP2.2 Authentication Done.\n", __func__);
+		pr_info("%s: HDCP2.2 Authentication Done.\n", __func__);
 
 		/* send HDCP PASS uevent */
 		mhl_tx_send_hdcp_state(HDCP_STATE_AUTHENTICATED);
@@ -1112,7 +1116,7 @@ static int hdcp2_isr(uint8_t intr_status)
 		mhl_pf_read_reg_block(REG_PAGE_3_HDCP2X_AUTH_STAT,
 			sizeof(ro_auth), ro_auth);
 
-		pr_debug("%s: HDCP2.2 Authentication Failed\n\tgp0 %02X, status %02X %02X\n",
+		pr_warn("%s: HDCP2.2 Authentication Failed\n\tgp0 %02X, status %02X %02X\n",
 			__func__,
 			ro_gp0, ro_auth[0],
 			ro_auth[1]);
@@ -1127,7 +1131,7 @@ static int hdcp2_isr(uint8_t intr_status)
 	if (intr_status & BIT_HDCP2_INTR_RPTR_RCVID_CHANGE)	{
 		int cnt;
 
-		pr_debug("%s: HDCP2.2 RCV_ID Changed.\n", __func__);
+		pr_info("%s: HDCP2.2 RCV_ID Changed.\n", __func__);
 
 			/* Read RCVR INFO and RCVR ID LIST */
 			mhl_pf_read_reg_block(REG_PAGE_3_HDCP2X_RPT_RCVID_OUT,
@@ -1164,28 +1168,28 @@ static int mhl3_block_isr(uint8_t status)
 	bool payload_encountered = false;
 
 	if (BIT_PAGE_3_EMSCINTR_EMSC_XFIFO_EMPTY & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XFIFO_EMPTY\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XFIFO_EMPTY\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_EMSC_XMIT_ACK_TOUT & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMIT_ACK_TOUT\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMIT_ACK_TOUT\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_SPI_EMSC_READ_ERR & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_EMSC_READ_ERR\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_EMSC_READ_ERR\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_SPI_EMSC_WRITE_ERR & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_EMSC_WRITE_ERR\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_EMSC_WRITE_ERR\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_SPI_COMMA_CHAR_ERR & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_COMMA_CHAR_ERR\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_COMMA_CHAR_ERR\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_EMSC_XMITDONE & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMITDONE\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMITDONE\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_EMSC_XMIT_GNT_TOUT & status)
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMIT_GNT_TOUT\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_EMSC_XMIT_GNT_TOUT\n",
 			__func__);
 	if (BIT_PAGE_3_EMSCINTR_SPI_DVLD & status) {
-		pr_debug("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_DVLD\n",
+		pr_info("%s: Got isr of BIT_PAGE_3_EMSCINTR_SPI_DVLD\n",
 			__func__);
 		if (block_input_buffer_available()) {
 			int block_index;
@@ -1292,13 +1296,13 @@ static int coc_isr(uint8_t coc_int_status)
 	}
 
 	if (BIT_COC_PLL_LOCK_STATUS_CHANGE & coc_int_status)
-		pr_debug("%s: COC PLL lock status change\n", __func__);
+		pr_info("%s: COC PLL lock status change\n", __func__);
 
 	if (BIT_COC_CALIBRATION_DONE & coc_int_status) {
 		int calibration_stat;
 		uint8_t calibrated_value;
 
-		pr_debug("%s: Calibration Done\n", __func__);
+		pr_info("%s: Calibration Done\n", __func__);
 
 		calibration_stat =
 			mhl_pf_read_reg(REG_PAGE_7_COC_STAT_0);
@@ -1316,7 +1320,7 @@ static int coc_isr(uint8_t coc_int_status)
 				BIT_TDM_INTR_SYNC_WAIT_MASK);
 			cbus_mode = CBUS_TRANSITIONAL_TO_eCBUS_S_CALIBRATED;
 		} else
-			pr_debug("%s: calibration state: 0x%02X\n",
+			pr_warn("%s: calibration state: 0x%02X\n",
 				__func__, calibration_stat);
 	}
 
@@ -1338,7 +1342,7 @@ static int tdm_isr(uint8_t intr_status)
 
 	if (BIT_TDM_INTR_SYNC_DATA & intr_status) {
 
-		pr_debug("%s: TDM in SYNC_DATA state.\n", __func__);
+		pr_info("%s: TDM in SYNC_DATA state.\n", __func__);
 		tdm_status = mhl_pf_read_reg(REG_PAGE_1_TRXSTA2);
 
 		if ((tdm_status & MSK_TDM_SYNCHRONIZED) ==
@@ -1361,7 +1365,7 @@ static int tdm_isr(uint8_t intr_status)
 	}
 
 	if (BIT_TDM_INTR_SYNC_WAIT & intr_status)
-		pr_err("%s: TDM in SYNC_WAIT state.\n", __func__);
+		pr_warn("%s: TDM in SYNC_WAIT state.\n", __func__);
 
 	return ret_val;
 }
@@ -1373,10 +1377,6 @@ void mhl_device_isr(void)
 	int already_cleared;
 	uint8_t intr_num;
 	uint8_t intr_stat;
-
-	pr_debug("\n\n\n\n********************************************************\n\n");
-
-	pr_debug("Got INTR\n\n\n");
 
 	for (intr_num = 0; (intr_num < MAX_INTR) &&
 		(is_interrupt_asserted()); intr_num++) {
@@ -1670,7 +1670,7 @@ int mhl_sii8620_device_start(void *context)
 	timeout = wait_for_completion_interruptible_timeout(&rgnd_done, HZ/2);
 	if (!timeout) {
 		/* timeout happens */
-		pr_debug("%s:time out\n", __func__);
+		pr_warn("%s:time out\n", __func__);
 		chip_power_off();
 		return MHL_USB_NON_INUSE;
 	} else {
@@ -1687,7 +1687,7 @@ int mhl_device_initialize(struct device *dev)
 {
 	int rc = 0;
 
-	pr_info("%s:\n", __func__);
+	pr_debug("%s:\n", __func__);
 
 	init_completion(&rgnd_done);
 
@@ -2023,19 +2023,19 @@ static char *mhl_dev_print_cbusp(MHL_DEV_CBUS_P cbusp)
 static void mhl_dev_print_cbusp_cond(void)
 {
 	if (MHL_DEV_IS_BIT_ACTIVE(cbusp_processing_cond, 1))
-		pr_info("%s: DEV_EDID_READ = 1\n", __func__);
+		pr_debug("%s: DEV_EDID_READ = 1\n", __func__);
 	else
-		pr_info("%s: DEV_EDID_READ = 0\n", __func__);
+		pr_debug("%s: DEV_EDID_READ = 0\n", __func__);
 
 	if (MHL_DEV_IS_BIT_ACTIVE(cbusp_processing_cond, 4))
-		pr_info("%s: DEV_WRITE_BURST_SEND = 1\n", __func__);
+		pr_debug("%s: DEV_WRITE_BURST_SEND = 1\n", __func__);
 	else
-		pr_info("%s: DEV_WRITE_BURST_SEND = 0\n", __func__);
+		pr_debug("%s: DEV_WRITE_BURST_SEND = 0\n", __func__);
 }
 
 void mhl_dev_set_cbusp_cond_processing(MHL_DEV_CBUS_P cbusp)
 {
-	pr_info("%s: %s\n", __func__, mhl_dev_print_cbusp(cbusp));
+	pr_debug("%s: %s\n", __func__, mhl_dev_print_cbusp(cbusp));
 
 	cbusp_processing_cond |= (int)cbusp;
 
@@ -2044,7 +2044,7 @@ void mhl_dev_set_cbusp_cond_processing(MHL_DEV_CBUS_P cbusp)
 
 void mhl_dev_clear_cbusp_cond_processing(MHL_DEV_CBUS_P cbusp)
 {
-	pr_info("%s: %s\n", __func__, mhl_dev_print_cbusp(cbusp));
+	pr_debug("%s: %s\n", __func__, mhl_dev_print_cbusp(cbusp));
 
 	cbusp_processing_cond &= (int)~cbusp;
 
@@ -2053,7 +2053,7 @@ void mhl_dev_clear_cbusp_cond_processing(MHL_DEV_CBUS_P cbusp)
 
 int mhl_device_get_cbusp_cond(void)
 {
-	pr_info("%s: cbus protocol cond: 0x%04x\n",
+	pr_debug("%s: cbus protocol cond: 0x%04x\n",
 	 __func__, cbusp_processing_cond);
 
 	mhl_dev_print_cbusp_cond();
@@ -2070,7 +2070,7 @@ bool mhl_device_is_cbusb_executing(void)
 			__func__, cbusp_processing_cond);
 		return true;
 	} else {
-		pr_info("%s: no\n", __func__);
+		pr_debug("%s: no\n", __func__);
 		return false;
 	}
 }
@@ -2085,7 +2085,7 @@ static int mhl_device_sysfs_init(struct device *parent)
 	struct class *cls = parent->class;
 
 	if (IS_ERR(cls)) {
-		pr_debug("%s: failed to create class", __func__);
+		pr_err("%s: failed to create class", __func__);
 	return -ENOMEM;
 	}
 
@@ -2342,7 +2342,7 @@ int stop_video(void)
 
 static void unmute_video(void)
 {
-	pr_debug("%s called\n", __func__);
+	pr_info("%s called\n", __func__);
 
 	if (IS_MODE_MHL3) {
 	} else {
@@ -2362,7 +2362,7 @@ static void start_hdcp_content_type(void)
 	uint8_t index;
 	uint8_t msg[2] = { 0x01, 0x00 }; /* One Stream */
 
-	pr_info("%s: HDCP Content Type = %d\n", __func__,  msg[1]);
+	pr_debug("%s: HDCP Content Type = %d\n", __func__,  msg[1]);
 
 	misc_ctrl = mhl_pf_read_reg(REG_PAGE_3_HDCP2X_MISC_CTRL);
 
@@ -2384,11 +2384,11 @@ static void start_hdcp_content_type(void)
 
 void start_hdcp(void)
 {
-	pr_debug("%s called\n", __func__);
+	pr_info("%s called\n", __func__);
 
 	/* Already during HDCP Authentication. */
 	if (hdcp_authentication) {
-		pr_debug("%s Already Authenticated.\n", __func__);
+		pr_warn("%s Already Authenticated.\n", __func__);
 		return;
 	}
 
@@ -2528,7 +2528,7 @@ uint8_t qualify_pixel_clock_for_mhl(uint32_t pixel_clock_frequency,
 	} else {
 		ret_val = 0;
 	}
-	pr_info("%s: Link clock:%u Hz %12s for MHL at %d bpp (max: %u Hz)\n",
+	pr_debug("%s: Link clock:%u Hz %12s for MHL at %d bpp (max: %u Hz)\n",
 		__func__,
 		link_clock_frequency,
 		ret_val?"valid":"unattainable",
@@ -2691,11 +2691,11 @@ static int set_hdmi_params()
 				/* enough for packed pixel */
 				is_compress_mode = 1;
 			} else {
-				pr_debug("%s: unsupported video mode", __func__);
+				pr_warn("%s: unsupported video mode", __func__);
 				return	false;
 			}
 		} else {
-			pr_debug("unsupported video mode. Sink doesn't support 4:2:2.\n");
+			pr_warn("unsupported video mode. Sink doesn't support 4:2:2.\n");
 			return	false;
 		}
 	}

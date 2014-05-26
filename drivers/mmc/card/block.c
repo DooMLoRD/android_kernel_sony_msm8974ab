@@ -199,9 +199,13 @@ static ssize_t power_ro_lock_show(struct device *dev,
 {
 	int ret;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
-	struct mmc_card *card = md->queue.card;
+	struct mmc_card *card;
 	int locked = 0;
 
+	if (!md)
+		return -EINVAL;
+
+	card = md->queue.card;
 	if (card->ext_csd.boot_ro_lock & EXT_CSD_BOOT_WP_B_PERM_WP_EN)
 		locked = 2;
 	else if (card->ext_csd.boot_ro_lock & EXT_CSD_BOOT_WP_B_PWR_WP_EN)
@@ -227,6 +231,8 @@ static ssize_t power_ro_lock_store(struct device *dev,
 		return count;
 
 	md = mmc_blk_get(dev_to_disk(dev));
+	if (!md)
+		return -EINVAL;
 	card = md->queue.card;
 
 	mmc_rpm_hold(card->host, &card->dev);
@@ -266,6 +272,9 @@ static ssize_t force_ro_show(struct device *dev, struct device_attribute *attr,
 	int ret;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
 
+	if (!md)
+		return -EINVAL;
+
 	ret = snprintf(buf, PAGE_SIZE, "%d",
 		       get_disk_ro(dev_to_disk(dev)) ^
 		       md->read_only);
@@ -280,6 +289,10 @@ static ssize_t force_ro_store(struct device *dev, struct device_attribute *attr,
 	char *end;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
 	unsigned long set = simple_strtoul(buf, &end, 0);
+
+	if (!md)
+		return -EINVAL;
+
 	if (end == buf) {
 		ret = -EINVAL;
 		goto out;
@@ -300,6 +313,8 @@ num_wr_reqs_to_start_packing_show(struct device *dev,
 	int num_wr_reqs_to_start_packing;
 	int ret;
 
+	if (!md)
+		return -EINVAL;
 	num_wr_reqs_to_start_packing = md->queue.num_wr_reqs_to_start_packing;
 
 	ret = snprintf(buf, PAGE_SIZE, "%d\n", num_wr_reqs_to_start_packing);
@@ -315,9 +330,13 @@ num_wr_reqs_to_start_packing_store(struct device *dev,
 {
 	int value;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
-	struct mmc_card *card = md->queue.card;
+	struct mmc_card *card;
 	int ret = count;
 
+	if (!md)
+		return -EINVAL;
+
+	card = md->queue.card;
 	if (!card) {
 		ret = -EINVAL;
 		goto exit;
@@ -349,9 +368,13 @@ bkops_check_threshold_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
-	struct mmc_card *card = md->queue.card;
+	struct mmc_card *card;
 	int ret;
 
+	if (!md)
+		return -EINVAL;
+
+	card = md->queue.card;
 	if (!card)
 		ret = -EINVAL;
 	else
@@ -369,10 +392,14 @@ bkops_check_threshold_store(struct device *dev,
 {
 	int value;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
-	struct mmc_card *card = md->queue.card;
+	struct mmc_card *card;
 	unsigned int card_size;
 	int ret = count;
 
+	if (!md)
+		return -EINVAL;
+
+	card = md->queue.card;
 	if (!card) {
 		ret = -EINVAL;
 		goto exit;
@@ -410,6 +437,8 @@ no_pack_for_random_show(struct device *dev,
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
 	int ret;
 
+	if (!md)
+		return -EINVAL;
 	ret = snprintf(buf, PAGE_SIZE, "%d\n", md->queue.no_pack_for_random);
 
 	mmc_blk_put(md);
@@ -423,9 +452,13 @@ no_pack_for_random_store(struct device *dev,
 {
 	int value;
 	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
-	struct mmc_card *card = md->queue.card;
+	struct mmc_card *card;
 	int ret = count;
 
+	if (!md)
+		return -EINVAL;
+
+	card = md->queue.card;
 	if (!card) {
 		ret = -EINVAL;
 		goto exit;
@@ -773,7 +806,7 @@ static int mmc_blk_ioctl_rpmb_cmd(struct block_device *bdev,
 	/* make sure this is a rpmb partition */
 	if ((!md) || (!(md->area_type & MMC_BLK_DATA_AREA_RPMB))) {
 		err = -EINVAL;
-		goto cmd_done;
+		return err;
 	}
 
 	idata = mmc_blk_ioctl_rpmb_copy_from_user(ic_ptr);
@@ -899,15 +932,145 @@ cmd_done:
 	return err;
 }
 
+static int mmc_queue_halt(struct mmc_queue *mq)
+{
+	struct request_queue *q = mq->queue;
+	unsigned long flags;
+	int rc = 0;
+
+	spin_lock_irqsave(q->queue_lock, flags);
+	queue_flag_set(QUEUE_FLAG_STOPPED, q);
+	spin_unlock_irqrestore(q->queue_lock, flags);
+
+	rc = down_trylock(&mq->thread_sem);
+	if (rc) {
+		/*
+		 * Failed to take the lock so better to abort the
+		 * halt because mmcqd thread is processing requests.
+		 */
+		spin_lock_irqsave(q->queue_lock, flags);
+		queue_flag_clear(QUEUE_FLAG_STOPPED, q);
+		spin_unlock_irqrestore(q->queue_lock, flags);
+		rc = -EBUSY;
+	}
+	return rc;
+}
+static void mmc_queue_continue(struct mmc_queue *mq)
+{
+	struct request_queue *q = mq->queue;
+	unsigned long flags;
+	up(&mq->thread_sem);
+
+	spin_lock_irqsave(q->queue_lock, flags);
+	queue_flag_clear(QUEUE_FLAG_STOPPED, q);
+	spin_unlock_irqrestore(q->queue_lock, flags);
+}
+
+static int mmc_oob_close(struct mmc_blk_data *md)
+{
+	struct mmc_blk_data *part_md;
+
+	if (!md)
+		return -EINVAL;
+
+	/* Continue all the halted queues. */
+	md->part_curr = md->part_type;
+	mmc_queue_continue(&md->queue);
+	printk(KERN_WARNING "Queue on %s continued\n",
+	       md->disk->disk_name);
+	list_for_each_entry(part_md, &md->part, part) {
+	  printk(KERN_WARNING "Queue on %s continued\n",
+		 part_md->disk->disk_name);
+	  mmc_queue_continue(&part_md->queue);
+	}
+	return 0;
+}
+
+static int mmc_oob_open(struct mmc_blk_data *md)
+{
+	struct mmc_blk_data *part_md;
+	int rc = 0;
+	printk(KERN_WARNING "Queue oob halt. %s\n", md->disk->disk_name);
+	if (!md)
+		return 0;
+
+	rc = mmc_queue_halt(&md->queue);
+
+	printk(KERN_WARNING "Queue halted status %s %d\n",
+	       md->disk->disk_name, rc);
+	if (rc)
+		return rc;
+
+	list_for_each_entry(part_md, &md->part, part) {
+	  rc = mmc_queue_halt(&part_md->queue);
+	  printk(KERN_WARNING "Queue halted on %s.\n",
+		 part_md->disk->disk_name);
+	}
+	if (rc) {
+		printk(KERN_WARNING "Queue halting failed.\n");
+		mmc_queue_continue(&md->queue);
+		list_for_each_entry(part_md, &md->part, part) {
+			mmc_queue_continue(&part_md->queue);
+		}
+	}
+
+	return rc;
+}
+
+static int mmc_blk_ioctl_oob(struct block_device *bdev,
+	struct mmc_ioc_oob __user *ic_ptr)
+{
+	struct mmc_ioc_oob data;
+	struct mmc_blk_data *md;
+	int ret = -EINVAL;
+
+	/*
+	 * The caller must have CAP_SYS_RAWIO, and must be calling this on the
+	 * whole block device, not on a partition.  This prevents overspray
+	 * between sibling partitions.
+	 */
+	if ((!capable(CAP_SYS_RAWIO)) || (bdev != bdev->bd_contains))
+		return -EPERM;
+
+	if (copy_from_user(&data, ic_ptr, sizeof(data)))
+		return -EFAULT;
+
+	md = mmc_blk_get(bdev->bd_disk);
+
+	if (!md)
+		return -EINVAL;
+
+	if (IS_ERR(md->queue.card)) {
+		mmc_blk_put(md);
+		return PTR_ERR(md->queue.card);
+	}
+
+	if (data.magic == OOB_MAGIC_ON)
+		ret = mmc_oob_open(md);
+	else if (data.magic == OOB_MAGIC_OFF)
+		ret = mmc_oob_close(md);
+
+	mmc_blk_put(md);
+	return ret;
+}
+
 static int mmc_blk_ioctl(struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg)
 {
 	int ret = -EINVAL;
-	if (cmd == MMC_IOC_CMD)
+
+	switch (cmd) {
+	case MMC_IOC_CMD:
 		ret = mmc_blk_ioctl_cmd(bdev, (struct mmc_ioc_cmd __user *)arg);
-	if (cmd == MMC_IOC_RPMB_CMD)
+		break;
+	case MMC_IOC_RPMB_CMD:
 		ret = mmc_blk_ioctl_rpmb_cmd(bdev,
 				(struct mmc_ioc_rpmb __user *)arg);
+		break;
+	case MMC_IOC_OOB:
+		ret = mmc_blk_ioctl_oob(bdev, (struct mmc_ioc_oob __user *)arg);
+		break;
+	}
 	return ret;
 }
 
@@ -2703,7 +2866,8 @@ out:
 	 */
 	if ((!req && !(mq->flags & MMC_QUEUE_NEW_REQUEST)) ||
 			((mq->flags & MMC_QUEUE_URGENT_REQUEST) &&
-				!(mq->mqrq_cur->req->cmd_flags & REQ_URGENT))) {
+			 !(mq->mqrq_cur->req->cmd_flags &
+				MMC_REQ_NOREINSERT_MASK))) {
 		if (mmc_card_need_bkops(card))
 			mmc_start_bkops(card, false);
 		/* release host only when there are no more requests */
@@ -3112,6 +3276,9 @@ static const struct mmc_fixup blk_fixups[] =
 	MMC_FIXUP(CID_NAME_ANY, CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_BROKEN_DATA_TIMEOUT),
 
+	/* Disable cache for this cards */
+	MMC_FIXUP("H8G2d", CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
+		  MMC_QUIRK_CACHE_DISABLE),
 	END_FIXUP
 };
 
@@ -3307,4 +3474,3 @@ module_exit(mmc_blk_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Multimedia Card (MMC) block device driver");
-

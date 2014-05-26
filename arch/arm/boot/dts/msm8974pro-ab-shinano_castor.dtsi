@@ -774,7 +774,7 @@
 	qcom,ibatsafe-ma = <3000>;
 	qcom,maxinput-dc-ma = <1800>;
 	qcom,maxinput-dc-mv = <10000>;
-	qcom,maxinput-usb-ma = <1500>;
+	qcom,maxinput-usb-ma = <1800>;
 	qcom,maxinput-usb-mv = <13000>;
 	qcom,thermal-mitigation = <3000 2500 2000 1500 1100 800 500 300 100 0>;
 	qcom,cool-bat-mv = <4350>;
@@ -1234,7 +1234,7 @@
 &sdcc2 {
 	qcom,bus-speed-mode = "SDR12", "SDR25", "SDR50", "DDR50";
 	qcom,current-limit = <400>;
-	qcom,pad-drv-on = <0x7 0x2 0x2>; /* 16mA, 6mA, 6mA */
+	qcom,pad-drv-on = <0x2 0x2 0x2>; /* 6mA, 6mA, 6mA */
 };
 
 &sdcc3 {
@@ -1250,7 +1250,7 @@
 
 &sdhc_2 {
 	qcom,vdd-current-level = <400000 400000>;
-	qcom,pad-drv-on = <0x7 0x2 0x2>; /* 16mA, 6mA, 6mA */
+	qcom,pad-drv-on = <0x2 0x2 0x2>; /* 6mA, 6mA, 6mA */
 };
 
 &spmi_bus {
@@ -1551,6 +1551,7 @@
 
 &usb3 {
 	qcom,dwc-hsphy-init = <0x00D0CC27>;
+	current_system_max_limit = <1800>;
 };
 
 &mdss_mdp {

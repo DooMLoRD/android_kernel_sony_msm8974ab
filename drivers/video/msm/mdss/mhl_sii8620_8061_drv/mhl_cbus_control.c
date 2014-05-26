@@ -252,9 +252,9 @@ static void *rapk_receive_timer;
 
 static void mhl_rapk_receive_timer(void *callback_param)
 {
-	pr_info("%s: expired\n", __func__);
+	pr_warn("%s: expired\n", __func__);
 	mhl_dev_clear_cbusp_cond_processing(DEV_RAP_SEND);
-	pr_debug("%s: msc_msg_last_send_data = 0x%2x\n",
+	pr_warn("%s: msc_msg_last_send_data = 0x%2x\n",
 		__func__, cbus_context.msc_msg_last_send_data);
 	cbus_context.current_cbus_req = NULL;
 	exe_cbus_command();
@@ -452,7 +452,7 @@ bool set_cbus_command(uint8_t command, uint8_t reg, uint8_t reg_data)
 	req->reg		= reg;
 	req->reg_data		= reg_data;
 
-	pr_debug("[CBUS] set %s reg: %X reg_data %X\n",
+	pr_info("[CBUS] set %s reg: %X reg_data %X\n",
 		 get_cbus_command_string(req->command),
 		 req->reg, req->reg_data);
 
@@ -476,7 +476,7 @@ bool set_cbus_command_block(
 	req = get_free_cbus_queue_entry();
 
 	if (req == NULL) {
-		pr_debug("%s:CBUS free queue exhausted\n", __func__);
+		pr_warn("%s:CBUS free queue exhausted\n", __func__);
 		return false;
 	}
 
@@ -486,7 +486,7 @@ bool set_cbus_command_block(
 	req->offset		= burst_offset;
 	memcpy(req->msg_data, buffer, length);
 
-	pr_debug("[CBUS] set %s\n", get_cbus_command_string(req->command));
+	pr_info("[CBUS] set %s\n", get_cbus_command_string(req->command));
 
 	queue_cbus_transaction(req);
 
@@ -501,14 +501,14 @@ static void mhl_cbus_send_cbus_mode_up(void)
 					MHL_RAP_CBUS_MODE_UP);
 		cbus_context.flag.cbus_mode_up = true;
 	} else
-		pr_debug("%s: already CBUS_MODE_UP\n", __func__);
+		pr_warn("%s: already CBUS_MODE_UP\n", __func__);
 }
 
 void exe_cbus_command(void){
 	struct cbus_req *req;
 
 	if (cbus_context.cbus_abort_delay_active) {
-		pr_debug("%s CBUS abort delay in progress "		\
+		pr_warn("%s CBUS abort delay in progress "		\
 			 "can't send any messages\n", __func__);
 		return;
 	}
@@ -516,7 +516,7 @@ void exe_cbus_command(void){
 	req = cbus_context.current_cbus_req;
 
 	if (req != NULL) {
-		pr_debug("%s:%s is in progress\n",
+		pr_info("%s:%s is in progress\n",
 			 __func__, get_cbus_command_string(req->command));
 		return;
 	}
@@ -536,7 +536,7 @@ void exe_cbus_command(void){
 
 		cbus_context.current_cbus_req = req;
 
-		pr_debug("[CBUS] exe %s reg: %X reg_data %X\n",
+		pr_info("[CBUS] exe %s reg: %X reg_data %X\n",
 			 get_cbus_command_string(req->command),
 			 req->reg, req->reg_data);
 
@@ -679,7 +679,7 @@ void mhl_msc_cbus_communication_start()
 
 void mhl_cbus_communication_eCBUS_start(void)
 {
-	pr_info("%s called\n", __func__);
+	pr_debug("%s called\n", __func__);
 
 	if (MHL_STATUS_DCAP_RDY & cbus_context.status_0) {
 		set_cbus_command(MHL_READ_XDEVCAP, 0, 0);
@@ -868,7 +868,7 @@ void mhl_cbus_process_vc_assign(uint8_t *write_burst_data)
 
 		if (tdm_burst->vc_info[idx].req_resp.response
 						== VC_RESPONSE_ACCEPT) {
-			pr_info("%s: Source accepted requested virtual"\
+			pr_debug("%s: Source accepted requested virtual"\
 					"channel %d reassignment\n",
 					__func__,
 					tdm_burst->vc_info[idx].vc_num);
@@ -891,9 +891,13 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 
 	req = cbus_context.current_cbus_req;
 	if (req == NULL) {
-		pr_debug("No message to associate with completion notification\n");
+		pr_warn("No message to associate with completion notification\n");
 		return;
 	}
+
+	pr_info("complete cbus req: %s reg: %X reg_data %X\n",
+			get_cbus_command_string(req->command),
+			req->reg, req->reg_data);
 
 	/* In the case of NACK,
 	   re-try process must be executed otherwise
@@ -905,16 +909,7 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 			pr_info("%s:cbus is executing. skip!", __func__);
 			return;
 		}
-
-		pr_info("complete cbus req: %s\n",
-				get_cbus_command_string(req->command));
-	} else {
-		pr_info("not complete cbus req: %s\n",
-				get_cbus_command_string(req->command));
 	}
-
-	pr_info("complete cbus req: %s\n",
-	 get_cbus_command_string(req->command));
 
 	cbus_context.current_cbus_req = NULL;
 
@@ -943,8 +938,10 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 			DEVCAP_SIZE,
 			false/*devcap*/);
 
+		/* devcap log */
+		pr_info("devcap");
 		for (i = 0; i < sizeof(cbus_context.devcap.devcap_cache); i++) {
-			pr_debug("devcap[0x%X]: %.2X\n", i,
+			pr_info(" [0x%X:%.2X]", i,
 				 cbus_context.devcap.devcap_cache[i]);
 		}
 
@@ -965,7 +962,7 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 		if (temp) {
 			set_cond_in_cbus_control(DEVCAP_ALL_READ_DONE);
 		} else {
-			pr_warn("%s:devcap did not change\n", __func__);
+			pr_debug("%s:devcap did not change\n", __func__);
 		}
 
 		/*
@@ -992,8 +989,10 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 			XDEVCAP_OFFSET(XDEVCAP_LIMIT),
 			true/*xdevcap*/);
 
+		/* xdevcap log */
+		pr_info("xdevcap");
 		for (i = 0; i < XDEVCAP_OFFSET(XDEVCAP_LIMIT); i++) {
-			pr_debug("xdevcap[0x%X]: %.2X\n", i,
+			pr_info(" [0x%X:%.2X]", i,
 				cbus_context.xdevcap.xdevcap_cache[i]);
 		}
 
@@ -1009,9 +1008,9 @@ void mhl_msc_command_done(bool is_Msc_Msg_Ack)
 			temp |= xdevcap_changes.xdevcap_cache[i];
 		if (temp)
 			/* Not implemented */
-			pr_warn("%s:Not implemented\n", __func__);
+			pr_debug("%s:Not implemented\n", __func__);
 		else
-			pr_warn("%s:xdevcap did not change\n", __func__);
+			pr_debug("%s:xdevcap did not change\n", __func__);
 
 			set_cbus_command(MHL_READ_DEVCAP, 0, 0);
 			pr_debug("%s: DEVCAP Read, after XDEVCAP Read.\n",
@@ -1114,7 +1113,7 @@ void mhl_msc_hpd_receive()
 	}
 
 	if (0 == status) {
-		pr_debug("[CBUS] got CLR_HPD\n");
+		pr_info("[CBUS] got CLR_HPD\n");
 		clear_cond_in_cbus_control(RCV_HPD);
 
 		/* FIXME
@@ -1123,7 +1122,7 @@ void mhl_msc_hpd_receive()
 		   if clear is done before EDID read starts) */
 
 	} else {
-		pr_debug("[CBUS] got SET_HPD\n");
+		pr_info("[CBUS] got SET_HPD\n");
 		set_cond_in_cbus_control(RCV_HPD);
 	}
 
@@ -1171,22 +1170,21 @@ void mhl_msc_write_stat_receive()
 	cbus_context.xstatus_1 = xstatus_1;
 	cbus_context.xstatus_3 = xstatus_3;
 
-	pr_debug("status_0: %X\n", status_0);
-	pr_debug("status_1: %X\n", status_1);
-	pr_debug("status_2: %X\n", status_2);
-	pr_debug("xstatus_1: %X\n", xstatus_1);
-	pr_debug("xstatus_3: %X\n", xstatus_3);
+	pr_info("  write_stat [0:0x%02x][1:0x%02x][2:0x%02x]\n",
+		write_stat[0], write_stat[1], write_stat[2]);
+	pr_info("  Wwrite_stat[0:0x%02x][1:0x%02x][2:0x%02x][3:0x%02x]\n",
+		write_xstat[0], write_xstat[1], write_xstat[2], write_xstat[3]);
 
 	if (MHL_STATUS_DCAP_RDY & status_change_bit_mask_0) {
-		pr_debug("DCAP_RDY changed\n");
+		pr_info("DCAP_RDY changed\n");
 		if (MHL_STATUS_DCAP_RDY & status_0) {
-			pr_debug("\n\ngot DCAP_RDY\n\n");
+			pr_debug("got DCAP_RDY\n");
 
 			switch (mhl_device_get_cbus_mode()) {
 			case CBUS_oCBUS_PEER_VERSION_PENDING:
 				if (cbus_context.status_2 >= 0x30) {
 					if (MHL_STATUS_XDEVCAPP_SUPP & status_0) {
-						pr_info("%s: speer is MHL3 or newer\n",
+						pr_debug("%s: speer is MHL3 or newer\n",
 							__func__);
 						/* Our peer is an MHL3.0 or newer device.
 						   Here we enable DEVCAP_X and STATUS_X operations */
@@ -1204,7 +1202,7 @@ void mhl_msc_write_stat_receive()
 			/* after the above does not indicate MHL3,
 			   then it's MHL1.x or MHL2.x */
 			if (CBUS_oCBUS_PEER_VERSION_PENDING == mhl_device_get_cbus_mode()) {
-				pr_info("%s: speer is MHL2 or older\n",
+				pr_debug("%s: speer is MHL2 or older\n",
 					__func__);
 
 				mhl_device_switch_cbus_mode(
@@ -1239,10 +1237,10 @@ void mhl_msc_write_stat_receive()
 	}
 
 	if (MHL_STATUS_PATH_ENABLED & status_change_bit_mask_1) {
-		pr_debug("PATH_EN changed\n");
+		pr_info("PATH_EN changed\n");
 
 		if (MHL_STATUS_PATH_ENABLED & status_1) {
-			pr_debug("\n\ngot PATH_EN 1\n\n");
+			pr_info("got PATH_EN 1\n");
 
 			set_cond_in_cbus_control(SENT_PATH_EN_1);
 			cbus_context.link_mode |= MHL_STATUS_PATH_ENABLED;
@@ -1250,7 +1248,7 @@ void mhl_msc_write_stat_receive()
 					 cbus_context.link_mode);
 
 		} else{
-			pr_debug("\n\ngot PATH_EN 0\n\n");
+			pr_info("got PATH_EN 0\n");
 
 			clear_cond_in_cbus_control(SENT_PATH_EN_1);
 			cbus_context.link_mode &= ~MHL_STATUS_PATH_ENABLED;
@@ -1286,7 +1284,7 @@ void mhl_msc_msg_receive()
 
 	switch (sub_cmd) {
 	case MHL_MSC_MSG_RCP:
-		pr_debug("%s: MHL: receive RCP(0x%02x)\n", __func__, cmd_data);
+		pr_info("%s: MHL: receive RCP(0x%02x)\n", __func__, cmd_data);
 		st = mhl_tx_rcp_input(cmd_data);
 		if (st == 0) {
 			set_cbus_command(MHL_MSC_MSG, MHL_MSC_MSG_RCPK,
@@ -1300,15 +1298,15 @@ void mhl_msc_msg_receive()
 		}
 		break;
 	case MHL_MSC_MSG_RCPK:
-		pr_debug("%s: MHL: receive RCPK(0x%02x)\n",
+		pr_info("%s: MHL: receive RCPK(0x%02x)\n",
 				__func__, cmd_data);
 		break;
 	case MHL_MSC_MSG_RCPE:
-		pr_debug("%s: MHL: receive RCPE(0x%02x)\n",
+		pr_info("%s: MHL: receive RCPE(0x%02x)\n",
 				__func__, cmd_data);
 		break;
 	case MHL_MSC_MSG_RAP:
-		pr_debug("%s: MHL: receive RAP(0x%02x)\n",
+		pr_info("%s: MHL: receive RAP(0x%02x)\n",
 				__func__, cmd_data);
 		cbus_context.msc_msg_last_rcv_data = cmd_data;
 		set_cbus_command(MHL_MSC_MSG, MHL_MSC_MSG_RAPK,
@@ -1336,7 +1334,7 @@ void mhl_msc_msg_receive()
 		}
 		break;
 	case MHL_MSC_MSG_RAPK:
-		pr_debug("%s: MHL: receive RAPK(0x%02x)\n",
+		pr_info("%s: MHL: receive RAPK(0x%02x)\n",
 				__func__, cmd_data);
 		mhl_rapk_receive_timer_stop();
 		mhl_dev_clear_cbusp_cond_processing(DEV_RAP_SEND);
@@ -1358,7 +1356,7 @@ void mhl_msc_msg_receive()
 		}
 		break;
 	default:
-		pr_debug("%s: MHL: receive invalid command 0x%02x (0x%02x)\n",
+		pr_warn("%s: MHL: receive invalid command 0x%02x (0x%02x)\n",
 				__func__, sub_cmd, cmd_data);
 		break;
 	}
@@ -1384,7 +1382,7 @@ void mhl_msc_set_int_receive()
 	intr_1 = int_msg[1];
 
 	if (MHL_INT_DCAP_CHG & intr_0) {
-		pr_debug("\n\ngot DCAP_CHG\n");
+		pr_info("got DCAP_CHG\n");
 
 		if (MHL_STATUS_DCAP_RDY & cbus_context.status_0) {
 			pr_debug("got DCAP_CHG & DCAP_RDY\n");
@@ -1409,7 +1407,7 @@ void mhl_msc_set_int_receive()
 	}
 
 	if (MHL_INT_EDID_CHG & intr_1) {
-		pr_debug("got EDID_CHG\n");
+		pr_info("got EDID_CHG\n");
 		clear_cond_in_cbus_control(RCV_HPD);
 		set_cond_in_cbus_control(RCV_HPD);
 	}
@@ -1430,14 +1428,14 @@ int get_device_id(void)
 
 	ret_val = mhl_pf_read_reg(REG_PAGE_0_DEV_IDH);
 	if (ret_val < 0) {
-		pr_debug("%s:I2C error 0x%x\n", __func__, ret_val);
+		pr_err("%s:I2C error 0x%x\n", __func__, ret_val);
 		return ret_val;
 	}
 	number = ret_val << 8;
 
 	ret_val = mhl_pf_read_reg(REG_PAGE_0_DEV_IDL);
 	if (ret_val < 0) {
-		pr_debug("%s:I2C error 0x%x\n", __func__, ret_val);
+		pr_err("%s:I2C error 0x%x\n", __func__, ret_val);
 		return ret_val;
 	}
 	ret_val |= number;
@@ -1462,7 +1460,7 @@ void init_devcap(void){
 
 static void read_devcap_fifo(uint8_t *dev_cap_buf, u8 size_dev, bool xdev)
 {
-	pr_info("%s called\n", __func__);
+	pr_debug("%s called\n", __func__);
 
 	mhl_pf_write_reg(REG_EDID_FIFO_INT_MASK,
 			 (BIT_INTR9_DEVCAP_DONE_MASK
@@ -1561,19 +1559,19 @@ void mhl_cbus_abort(uint8_t cbus_err_int)
 /* Print the reason for information */
 	if (msc_abort_reason) {
 		if (BIT_CBUS_MSC_MT_ABORT_INT_MAX_FAIL & msc_abort_reason) {
-			pr_debug("%s: Retry threshold exceeded\n", __func__);
+			pr_warn("%s: Retry threshold exceeded\n", __func__);
 		}
 		if (BIT_CBUS_MSC_MT_ABORT_INT_PROTO_ERR & msc_abort_reason) {
-			pr_debug("%s: Protocol Error\n", __func__);
+			pr_warn("%s: Protocol Error\n", __func__);
 		}
 		if (BIT_CBUS_MSC_MT_ABORT_INT_TIMEOUT & msc_abort_reason) {
-			pr_debug("%s: Translation layer timeout\n", __func__);
+			pr_warn("%s: Translation layer timeout\n", __func__);
 		}
 		if (BIT_CBUS_MSC_MT_ABORT_INT_UNDEF_CMD & msc_abort_reason) {
-			pr_debug("%s: Undefined opcode\n", __func__);
+			pr_warn("%s: Undefined opcode\n", __func__);
 		}
 		if (BIT_CBUS_MSC_MT_ABORT_INT_MSC_MT_PEER_ABORT & msc_abort_reason) {
-			pr_debug("%s: MSC Peer sent an ABORT\n", __func__);
+			pr_warn("%s: MSC Peer sent an ABORT\n", __func__);
 		}
 	}
 }
@@ -1708,25 +1706,25 @@ void init_cond_in_cbus_control(void)
 
 void set_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 {
-	pr_info("%s()\n", __func__);
+	pr_debug("%s()\n", __func__);
 	show_cond_in_cbus_control();
 
 	switch (cond) {
 	case DEVCAP_ALL_READ_DONE:
-		pr_info("%s:devcap_all\n", __func__);
+		pr_debug("%s:devcap_all\n", __func__);
 		cbus_context.flag.devcap_all = true;
 		if (is_ready_for_edid_read())
 			set_cbus_command(MHL_READ_EDID_BLOCK, 0, 0);
 
 		if (is_rap_supported()) {
-			pr_info("%s:rap_content_on request started\n",
+			pr_debug("%s:rap_content_on request started\n",
 					__func__);
 			send_content_on();
 		}
 		break;
 
 	case SENT_PATH_EN_1:
-		pr_info("%s:path en\n", __func__);
+		pr_debug("%s:path en\n", __func__);
 		cbus_context.flag.path_en = true;
 		if (cbus_context.flag.video_ready) {
 			if (is_video_muted() && (is_tmds_active() == false))
@@ -1735,7 +1733,7 @@ void set_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 		break;
 
 	case RCV_HPD:
-		pr_info("%s:receive hpd\n", __func__);
+		pr_debug("%s:receive hpd\n", __func__);
 		cbus_context.flag.hpd = true;
 
 		if (is_ready_for_edid_read())
@@ -1745,15 +1743,15 @@ void set_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 		break;
 
 	case UPSTREAM_VIDEO_READY:
-		pr_info("%s:video ready\n", __func__);
+		pr_debug("%s:video ready\n", __func__);
 		cbus_context.flag.video_ready = true;
 		break;
 	case RCV_DCAP_CHG:
-		pr_info("%s:receive DCAP_CHG\n", __func__);
+		pr_debug("%s:receive DCAP_CHG\n", __func__);
 		cbus_context.flag.dcap_chg_rcv = true;
 		break;
 	case READ_ECBUS_SPEED:
-		pr_info("%s:read ECBUS_SPEED\n", __func__);
+		pr_debug("%s:read ECBUS_SPEED\n", __func__);
 		if (cbus_context.flag.dcap_chg_rcv)
 			mhl_cbus_send_cbus_mode_up();
 		break;
@@ -1773,18 +1771,18 @@ void set_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 
 void clear_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 {
-	pr_info("%s()\n", __func__);
+	pr_debug("%s()\n", __func__);
 
 	show_cond_in_cbus_control();
 
 	switch (cond) {
 	case DEVCAP_ALL_READ_DONE:
-		pr_info("%s:devcap_all\n", __func__);
+		pr_debug("%s:devcap_all\n", __func__);
 		cbus_context.flag.devcap_all = false;
 		break;
 
 	case SENT_PATH_EN_1:
-		pr_info("%s:path en\n", __func__);
+		pr_debug("%s:path en\n", __func__);
 		cbus_context.flag.path_en = false;
 		if (cbus_context.flag.video_ready) {
 			if (is_video_muted() == false) {
@@ -1799,7 +1797,7 @@ void clear_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 		break;
 
 	case RCV_HPD:
-		pr_info("%s:receice hpd\n", __func__);
+		pr_debug("%s:receice hpd\n", __func__);
 		cbus_context.flag.hpd = false;
 		cbus_context.flag.video_ready = false;
 		cbus_context.flag.tmds_ready = false;
@@ -1810,12 +1808,12 @@ void clear_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 		break;
 
 	case UPSTREAM_VIDEO_READY:
-		pr_info("%s:video ready\n", __func__);
+		pr_debug("%s:video ready\n", __func__);
 		cbus_context.flag.video_ready = false;
 		break;
 
 	case RCV_DCAP_CHG:
-		pr_info("%s:receive DCAP_CHG\n", __func__);
+		pr_debug("%s:receive DCAP_CHG\n", __func__);
 		cbus_context.flag.dcap_chg_rcv = false;
 		break;
 
@@ -1838,35 +1836,35 @@ bool get_cond_in_cbus_control(CBUS_CONTROL_COND cond)
 {
 	bool flag = false;
 
-	pr_info("%s()\n", __func__);
+	pr_debug("%s()\n", __func__);
 
 	switch (cond) {
 	case DEVCAP_ALL_READ_DONE:
-		pr_info("%s:devcap_all\n", __func__);
+		pr_debug("%s:devcap_all\n", __func__);
 		flag = cbus_context.flag.devcap_all;
 		break;
 	case SENT_PATH_EN_1:
-		pr_info("%s:path en\n", __func__);
+		pr_debug("%s:path en\n", __func__);
 		flag = cbus_context.flag.path_en;
 		break;
 	case RCV_HPD:
-		pr_info("%s:receice hpd\n", __func__);
+		pr_debug("%s:receice hpd\n", __func__);
 		flag = cbus_context.flag.hpd;
 		break;
 	case UPSTREAM_VIDEO_READY:
-		pr_info("%s:video ready\n", __func__);
+		pr_debug("%s:video ready\n", __func__);
 		flag = cbus_context.flag.video_ready;
 		break;
 	case RCV_DCAP_CHG:
-		pr_info("%s:receive DCAP_CHG\n", __func__);
+		pr_debug("%s:receive DCAP_CHG\n", __func__);
 		flag = cbus_context.flag.dcap_chg_rcv;
 		break;
 	case HDCP_READY:
-		pr_info("%s:hdcp ready\n", __func__);
+		pr_debug("%s:hdcp ready\n", __func__);
 		flag = cbus_context.flag.hdcp_ready;
 		break;
 	case TMDS_READY:
-		pr_info("%s:tmds ready\n", __func__);
+		pr_debug("%s:tmds ready\n", __func__);
 		flag = cbus_context.flag.tmds_ready;
 		break;
 	default:
@@ -1955,7 +1953,7 @@ static int mhl_create_timer(void)
 
 static void cbus_abort_timer_callback(void *callback_param)
 {
-	pr_debug("%s: CBUS abort timer expired, enable CBUS messaging\n",
+	pr_warn("%s: CBUS abort timer expired, enable CBUS messaging\n",
 		 __func__);
 
 	cbus_context.cbus_abort_delay_active = false;
@@ -2040,7 +2038,7 @@ void mhl_cbus_set_lowest_tmds_link_speed(uint32_t pixel_clock_frequency,
 				& MHL_XDC_TMDS_150) {
 			if ((link_clock_frequency <= 150000000)
 				&& (!found_fit)) {
-				pr_debug("%s: Mode fits TMDS Link Speed = 1.5Gbps (%d)\n",
+				pr_info("%s: Mode fits TMDS Link Speed = 1.5Gbps (%d)\n",
 					__func__, link_clock_frequency);
 				reg_val = VAL_PAGE_3_TX_ZONE_CTL3_TX_ZONE_1_5GBPS;
 				found_fit = true;
@@ -2057,7 +2055,7 @@ void mhl_cbus_set_lowest_tmds_link_speed(uint32_t pixel_clock_frequency,
 				& MHL_XDC_TMDS_300) {
 			if ((link_clock_frequency <= 300000000)
 				&& (!found_fit)) {
-				pr_debug("%s: Mode fits TMDS Link Speed = 3.0Gbps (%d)\n",
+				pr_info("%s: Mode fits TMDS Link Speed = 3.0Gbps (%d)\n",
 					__func__, link_clock_frequency);
 				reg_val = VAL_PAGE_3_TX_ZONE_CTL3_TX_ZONE_3GBPS;
 				found_fit = true;
@@ -2074,7 +2072,7 @@ void mhl_cbus_set_lowest_tmds_link_speed(uint32_t pixel_clock_frequency,
 			& MHL_XDC_TMDS_600) {
 			if ((link_clock_frequency <= 600000000)
 				&& (!found_fit)) {
-				pr_debug("%s: Mode fits TMDS Link Speed = 6.0Gbps (%d)\n",
+				pr_info("%s: Mode fits TMDS Link Speed = 6.0Gbps (%d)\n",
 					__func__, link_clock_frequency);
 				reg_val = VAL_PAGE_3_TX_ZONE_CTL3_TX_ZONE_6GBPS;
 				found_fit = true;
@@ -2083,9 +2081,9 @@ void mhl_cbus_set_lowest_tmds_link_speed(uint32_t pixel_clock_frequency,
 	}
 
 	if (!found_fit) {
-		pr_debug("%s: Cannot fit mode to any supported TMDS Link Speeds\n",
+		pr_info("%s: Cannot fit mode to any supported TMDS Link Speeds\n",
 				__func__);
-		pr_debug("%s: Forcing TMDS Link Speed = 6.0Gbps\n",
+		pr_info("%s: Forcing TMDS Link Speed = 6.0Gbps\n",
 				__func__);
 		reg_val = VAL_PAGE_3_TX_ZONE_CTL3_TX_ZONE_6GBPS;
 	}

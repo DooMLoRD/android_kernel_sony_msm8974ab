@@ -40,6 +40,14 @@
 /* Wait time (ms) before sending CONFIGURED uevent */
 #define WAIT_TIME_BEFORE_SENDING_CONFIGURED		(50)
 
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+#define USB_AUTO_CDROM_EJECTION_TIME	30000
+static int eject_cdrom_timer_start(int msec);
+static void eject_cdrom_timer_stop(void);
+static int eject_cdrom_reload(void);
+static void eject_cdrom_timer_work(struct work_struct *w);
+#endif
+
 /*
  * Kbuild is not very cooperative with respect to linking separately
  * compiled library objects into one module.  So for now we won't use
@@ -390,6 +398,13 @@ static void android_work(struct work_struct *data)
 		if (next_state != USB_SUSPENDED && next_state != USB_RESUMED) {
 			kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE,
 					   uevent_envp);
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+			if (next_state == USB_DISCONNECTED &&
+				last_uevent != USB_CONNECTED) {
+				eject_cdrom_timer_stop();
+				eject_cdrom_reload();
+			}
+#endif
 			last_uevent = next_state;
 		}
 		pr_info("%s: sent uevent %s\n", __func__, uevent_envp[0]);
@@ -1771,6 +1786,9 @@ static struct android_usb_function ecm_function = {
 struct mass_storage_function_config {
 	struct fsg_config fsg;
 	struct fsg_common *common;
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+	struct delayed_work eject_work;
+#endif
 };
 
 static int mass_storage_function_init(struct android_usb_function *f,
@@ -1848,6 +1866,9 @@ static int mass_storage_function_init(struct android_usb_function *f,
 
 	config->common = common;
 	f->config = config;
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+	INIT_DELAYED_WORK(&config->eject_work, eject_cdrom_timer_work);
+#endif
 	return 0;
 error:
 	for (; i > 0 ; i--)
@@ -2065,6 +2086,85 @@ static struct android_usb_function cdrom_function = {
 	.bind_config	= cdrom_function_bind_config,
 	.attributes	= cdrom_function_attributes,
 };
+
+static int msc_cdrom_function_init(struct android_usb_function *f,
+				struct usb_composite_dev *cdev)
+{
+	f->config = mass_storage_function.config;
+	return 0;
+}
+
+static int msc_cdrom_function_bind_config(struct android_usb_function *f,
+					struct usb_configuration *c)
+{
+	struct mass_storage_function_config *config = f->config;
+
+	config->common->storage_mode = STORAGE_MODE_MSC_CDROM;
+	fsg_common_setup_luns(config->common);
+
+	return fsg_bind_config(c->cdev, c, config->common);
+}
+
+static struct android_usb_function msc_cdrom_function = {
+	.name		= "msc_cdrom",
+	.init		= msc_cdrom_function_init,
+	.bind_config	= msc_cdrom_function_bind_config,
+};
+
+#ifdef CONFIG_USB_AUTO_CDROM_EJECTION
+static void eject_cdrom_timer_work(struct work_struct *w)
+{
+	struct mass_storage_function_config *config =
+			container_of(w, struct mass_storage_function_config,
+							eject_work.work);
+	struct fsg_common *common = config->common;
+
+	do_eject(common, &common->luns_all[common->msc_nluns]);
+}
+
+static int eject_cdrom_timer_start(int msec)
+{
+	struct mass_storage_function_config *config;
+	struct fsg_common *common;
+
+	config = cdrom_function.config;
+	if (!config)
+		return -EINVAL;
+
+	common = config->common;
+	if (fsg_lun_is_open(&common->luns_all[common->msc_nluns]))
+		schedule_delayed_work(&config->eject_work,
+							msecs_to_jiffies(msec));
+	else
+		pr_debug("%s: iso image is not loaded!\n", __func__);
+
+	return 0;
+}
+
+static void eject_cdrom_timer_stop(void)
+{
+	struct mass_storage_function_config *config;
+
+	config = cdrom_function.config;
+	if (!config)
+		return;
+
+	cancel_delayed_work_sync(&config->eject_work);
+}
+
+static int eject_cdrom_reload(void)
+{
+	struct mass_storage_function_config *config;
+	struct fsg_common *common;
+
+	config = cdrom_function.config;
+	if (!config)
+		return -EINVAL;
+
+	common = config->common;
+	return do_reload(common, &common->luns_all[common->msc_nluns]);
+}
+#endif /* CONFIG_USB_AUTO_CDROM_EJECTION */
 
 static int accessory_function_init(struct android_usb_function *f,
 					struct usb_composite_dev *cdev)
@@ -2312,6 +2412,7 @@ static struct android_usb_function *supported_functions[] = {
 	&ncm_function,
 	&mass_storage_function,
 	&cdrom_function,
+	&msc_cdrom_function,
 	&accessory_function,
 #ifdef CONFIG_SND_PCM
 	&audio_source_function,

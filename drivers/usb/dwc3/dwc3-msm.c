@@ -1,4 +1,5 @@
 /* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012 Sony Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -218,6 +219,7 @@ struct dwc3_msm {
 	struct qpnp_adc_tm_chip *adc_tm_dev;
 	struct delayed_work	init_adc_work;
 	bool			id_adc_detect;
+	struct qpnp_vadc_chip	*vadc_dev;
 	u8			dcd_retries;
 	u32			bus_perf_client;
 	struct msm_bus_scale_pdata	*bus_scale_table;
@@ -248,7 +250,18 @@ struct dwc3_msm {
 	bool ext_chg_opened;
 	bool ext_chg_active;
 	struct completion ext_chg_wait;
+
+	unsigned int		current_system_max_limit;
+	u8			hvdcp_state;
+#define USB_HVDCP_NONE		0x00
+#define USB_HVDCP_5V_REQ	0x01
+#define USB_HVDCP_9V_REQ	0x02
+#define USB_HVDCP_IN_REQ	0x03
+#define USB_HVDCP_5V_DONE	0x04
+#define USB_HVDCP_9V_DONE	0x08
 };
+
+#define USB_HVDCP_9V_CHG_MAX	1800
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
 #define USB_HSPHY_3P3_VOL_MAX		3300000 /* uV */
@@ -2260,6 +2273,27 @@ static irqreturn_t msm_dwc3_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static int
+get_prop_usbin_voltage_now(struct dwc3_msm *mdwc)
+{
+	int rc = 0;
+	struct qpnp_vadc_result results;
+
+	if (IS_ERR_OR_NULL(mdwc->vadc_dev)) {
+		mdwc->vadc_dev = qpnp_get_vadc(mdwc->dev, "usbin");
+		if (IS_ERR(mdwc->vadc_dev))
+			return PTR_ERR(mdwc->vadc_dev);
+	}
+
+	rc = qpnp_vadc_read(mdwc->vadc_dev, USBIN, &results);
+	if (rc) {
+		pr_err("Unable to read usbin rc=%d\n", rc);
+		return 0;
+	} else {
+		return results.physical;
+	}
+}
+
 static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  union power_supply_propval *val)
@@ -2288,6 +2322,9 @@ static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_TYPE:
 		val->intval = psy->type;
 		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		val->intval = get_prop_usbin_voltage_now(mdwc);
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -2315,6 +2352,10 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			mdwc->ext_xceiv.bsv = val->intval;
 			dev_info(mdwc->dev, "%s: set bsv=%d\n", __func__,
 							mdwc->ext_xceiv.bsv);
+			if (!mdwc->ext_xceiv.bsv) {
+				dev_dbg(mdwc->dev, "clear hvdcp state\n");
+				mdwc->hvdcp_state = USB_HVDCP_NONE;
+			}
 			/*
 			 * set debouncing delay to 120msec. Otherwise battery
 			 * charging CDP complaince test fails if delay > 120ms.
@@ -2343,17 +2384,42 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_SYSTEM_MAX:
 		/* update current_system_max */
-		uA = (val->intval > 1000 * DWC3_IDEV_CHG_MAX) ?
-			1000 * DWC3_IDEV_CHG_MAX : val->intval;
+		uA = (val->intval > 1000 * mdwc->current_system_max_limit) ?
+			1000 * mdwc->current_system_max_limit : val->intval;
 		mdwc->current_system_max = uA;
 		dev_dbg(mdwc->dev, "set current_system_max = %d uA\n", uA);
 
 		/* update current_max if USB online (except ext_inuse) */
 		if (uA && mdwc->online && mdwc->current_max &&
 						!mdwc->ext_inuse) {
-			if (mdwc->charger.chg_type == DWC3_SDP_CHARGER &&
-				uA > 1000 * CONFIG_USB_GADGET_VBUS_DRAW)
-				uA = 1000 * CONFIG_USB_GADGET_VBUS_DRAW;
+			switch (mdwc->charger.chg_type) {
+			case DWC3_SDP_CHARGER:
+				if (uA > 1000 * CONFIG_USB_GADGET_VBUS_DRAW)
+					uA = 1000 * CONFIG_USB_GADGET_VBUS_DRAW;
+				break;
+			case DWC3_DCP_CHARGER:
+				/* do not change during transition */
+				if (USB_HVDCP_IN_REQ & mdwc->hvdcp_state)
+					return 0;
+				/* if HVDCP 9V, limit to 1800mA */
+				if (USB_HVDCP_9V_DONE == mdwc->hvdcp_state) {
+					if (uA > 1000 * USB_HVDCP_9V_CHG_MAX)
+						uA = 1000 *
+							USB_HVDCP_9V_CHG_MAX;
+					break;
+				}
+				/* if HVDCP 5V or normal DCP, limit to 1500mA */
+				/* fall through */
+			case DWC3_CDP_CHARGER:
+			case DWC3_PROPRIETARY_CHARGER:
+				if (uA > 1000 * DWC3_IDEV_CHG_MAX)
+					uA = 1000 * DWC3_IDEV_CHG_MAX;
+				break;
+			case DWC3_INVALID_CHARGER:
+			case DWC3_FLOATED_CHARGER:
+			default:
+				return 0;
+			}
 			mdwc->current_max = uA;
 			dev_dbg(mdwc->dev, "set current_max = %d uA\n", uA);
 		}
@@ -2423,6 +2489,7 @@ static enum power_supply_property dwc3_msm_pm_power_props_usb[] = {
 	POWER_SUPPLY_PROP_CURRENT_SYSTEM_MAX,
 	POWER_SUPPLY_PROP_TYPE,
 	POWER_SUPPLY_PROP_SCOPE,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 };
 
 static void dwc3_init_adc_work(struct work_struct *w);
@@ -2703,6 +2770,69 @@ dwc3_msm_ext_chg_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			pm_runtime_put(mdwc->dev);
 		}
 		break;
+	case MSM_USB_EXT_CHG_VOLTAGE_INFO:
+		if (get_user(val, (int __user *)arg)) {
+			pr_err("%s: get_user failed\n\n", __func__);
+			ret = -EFAULT;
+			break;
+		}
+
+		if (val == USB_REQUEST_5V)
+			pr_debug("%s:voting 5V voltage request\n", __func__);
+		else if (val == USB_REQUEST_9V)
+			pr_debug("%s:voting 9V voltage request\n", __func__);
+		mdwc->hvdcp_state = val;
+		break;
+	case MSM_USB_EXT_CHG_RESULT:
+		if (get_user(val, (int __user *)arg)) {
+			pr_err("%s: get_user failed\n\n", __func__);
+			ret = -EFAULT;
+			break;
+		}
+
+		if (!val) {
+			pr_debug("%s:voltage request successful\n", __func__);
+			if ((DWC3_DCP_CHARGER == mdwc->charger.chg_type) &&
+							mdwc->ext_xceiv.bsv) {
+				switch (mdwc->hvdcp_state) {
+				case USB_HVDCP_9V_REQ:
+					mdwc->hvdcp_state = USB_HVDCP_9V_DONE;
+					pr_debug("%s: set limit to %dmA\n",
+							__func__,
+							USB_HVDCP_9V_CHG_MAX);
+					power_supply_set_current_limit(
+						&mdwc->usb_psy,
+						1000 * USB_HVDCP_9V_CHG_MAX);
+					break;
+				case USB_HVDCP_5V_REQ:
+					mdwc->hvdcp_state = USB_HVDCP_5V_DONE;
+					pr_debug("%s: set limit to %dmA\n",
+							__func__,
+							DWC3_IDEV_CHG_MAX);
+					power_supply_set_current_limit(
+						&mdwc->usb_psy,
+						1000 * DWC3_IDEV_CHG_MAX);
+					break;
+				default:
+					pr_err("%s: invalid state=%u\n",
+						__func__, mdwc->hvdcp_state);
+					break;
+				}
+			} else {
+				pr_info("%s: QC charger was gone\n", __func__);
+			}
+		} else {
+			pr_debug("%s:voltage request failed\n", __func__);
+			if ((DWC3_DCP_CHARGER == mdwc->charger.chg_type) &&
+							mdwc->ext_xceiv.bsv) {
+				mdwc->hvdcp_state = USB_HVDCP_5V_DONE;
+				pr_debug("%s: set limit to %dmA\n", __func__,
+							DWC3_IDEV_CHG_MAX);
+				power_supply_set_current_limit(&mdwc->usb_psy,
+						1000 * DWC3_IDEV_CHG_MAX);
+			}
+		}
+		break;
 	default:
 		ret = -EINVAL;
 	}
@@ -2814,6 +2944,8 @@ static int __devinit dwc3_msm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mdwc);
 	mdwc->dev = &pdev->dev;
+
+	mdwc->hvdcp_state = USB_HVDCP_NONE;
 
 	INIT_LIST_HEAD(&mdwc->req_complete_list);
 	INIT_DELAYED_WORK(&mdwc->chg_work, dwc3_chg_detect_work);
@@ -3122,6 +3254,24 @@ static int __devinit dwc3_msm_probe(struct platform_device *pdev)
 				 &mdwc->qdss_tx_fifo_size))
 		dev_err(&pdev->dev,
 			"unable to read platform data qdss tx fifo size\n");
+
+	if (of_property_read_u32(node, "current_system_max_limit",
+				 &mdwc->current_system_max_limit))
+		mdwc->current_system_max_limit = DWC3_IDEV_CHG_MAX;
+
+	/*
+	 * set current_system_max 1,500mA and less as a default in dwc3 driver
+	 * because a judgment in sysmon is necessary to set over 1,500mA.
+	 */
+	if (DWC3_IDEV_CHG_MAX > mdwc->current_system_max_limit)
+		mdwc->current_system_max = 1000 *
+						mdwc->current_system_max_limit;
+	else
+		mdwc->current_system_max = 1000 * DWC3_IDEV_CHG_MAX;
+
+	dev_dbg(&pdev->dev, "set current system max=%dmA, limit=%dmA\n",
+					mdwc->current_system_max / 1000,
+					mdwc->current_system_max_limit);
 
 	dwc3_set_notifier(&dwc3_msm_notify_event);
 	/* usb_psy required only for vbus_notifications or charging support */
