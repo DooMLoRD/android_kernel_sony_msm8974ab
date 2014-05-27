@@ -167,11 +167,25 @@ static void __init draw_logo(void)
 
 int __init logo_init(void)
 {
+/*
+ * DooMLoRD: fix custom bootlogo not showing up 
+ *
+ * Z2 seems to have a two step boot-up, so in second stage when
+ * custom kernel is booting it sees that the logo is already drawn and skips
+ * redraw. So we disable the "display_on_in_boot" check and force redraw.
+ */ 
+#if 0
 	if (display_on_in_boot)
 		printk(KERN_INFO "Skip drawing logo. Already drawn in boot.\n");
 	else if (!load_565rle_image(INIT_IMAGE_FILE))
 		draw_logo();
-
+#else
+	if (!load_565rle_image(INIT_IMAGE_FILE))
+	{
+		printk(KERN_INFO "DooMLoRD: Force drawing logo.\n");
+		draw_logo();
+	}
+#endif
 	return 0;
 }
 
