@@ -3807,7 +3807,7 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 #ifdef SOMC_WLAN_BCN_TIMEOUT
 	uint bcn_timeout = SOMC_WLAN_BCN_TIMEOUT;
 #else
-	uint bcn_timeout = 4;
+	uint bcn_timeout = 8;
 #endif /* SOMC_WLAN_BCN_TIMEOUT */
 	uint retry_max = 3;
 #if defined(ARP_OFFLOAD_SUPPORT)

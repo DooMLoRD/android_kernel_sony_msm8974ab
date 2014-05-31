@@ -602,7 +602,12 @@ typedef enum somc_nv_item {
 	SOMC_TA_TXPWR_2_4G = 0,
 	SOMC_TA_TXPWR_5G_LOW,
 	SOMC_TA_TXPWR_5G_MID,
-	SOMC_TA_TXPWR_5G_HIGH
+	SOMC_TA_TXPWR_5G_HIGH,
+	SOMC_TA_RSSI_2_4_G,
+	SOMC_TA_RSSI_5G_W52,
+	SOMC_TA_RSSI_5G_W53,
+	SOMC_TA_RSSI_5G_W56,
+	SOMC_TA_RSSI_5G_W58
 } somc_nv_item_t;
 
 /* Paths to miscTA import files */
@@ -611,10 +616,17 @@ static const char *somc_ta_paths[] = {
 	"/data/etc/wlan_txpower_5g_low",
 	"/data/etc/wlan_txpower_5g_mid",
 	"/data/etc/wlan_txpower_5g_high",
+	"/data/etc/wlan_rssi_cal_2_4g",
+	"/data/etc/wlan_rssi_cal_5g_w52",
+	"/data/etc/wlan_rssi_cal_5g_w53",
+	"/data/etc/wlan_rssi_cal_5g_w56",
+	"/data/etc/wlan_rssi_cal_5g_w58"
 };
 
 #define SOMC_MAX_TABUF_SIZE 128
 #define SOMC_TXPWR_BUF_SIZE 7
+#define SOMC_RSSI_2_4G_BUF_SIZE 4
+#define SOMC_RSSI_5G_BUF_SIZE 6
 
 /* Keys used in calibration file for tx power */
 #define SOMC_CKEY_TXPWR_2_4G_11B     "cckbw202gpo"
@@ -630,6 +642,16 @@ static const char *somc_ta_paths[] = {
 #define SOMC_CKEY_TXPWR_5G_HIGH_11A  "mcsbw205ghpo"
 #define SOMC_CKEY_TXPWR_5G_HIGH_11N  "mcsbw405ghpo"
 #define SOMC_CKEY_TXPWR_5G_HIGH_11AC "mcsbw805ghpo"
+
+/* Keys used in calibration file for rssi calibration */
+#define SOMC_CKEY_RSSI_DELTA_2_4G    "rssi_delta_2g_c0"
+#define SOMC_CKEY_RSSI_DELTA_5G_W52  "rssi_delta_5gl_c0"
+#define SOMC_CKEY_RSSI_DELTA_5G_W53  "rssi_delta_5gml_c0"
+#define SOMC_CKEY_RSSI_DELTA_5G_W56  "rssi_delta_5gmu_c0"
+#define SOMC_CKEY_RSSI_DELTA_5G_W58  "rssi_delta_5gh_c0"
+
+#define SCHAR_MAX 0x7f      /* max value for a signed char */
+#define SCHAR_MIN (-0x7f-1) /* min value for a signed char */
 
 static int somc_txpower_min_delta = 0;
 
@@ -4210,8 +4232,10 @@ dhdsdio_write_vars(dhd_bus_t *bus)
 		/* Verify NVRAM bytes */
 		DHD_INFO(("Compare NVRAM dl & ul; varsize=%d\n", varsize));
 		nvram_ularray = (uint8*)MALLOC(bus->dhd->osh, varsize);
-		if (!nvram_ularray)
+		if (!nvram_ularray) {
+			MFREE(bus->dhd->osh, vbuffer, varsize);
 			return BCME_NOMEM;
+		}
 
 		/* Upload image to verify downloaded contents. */
 		memset(nvram_ularray, 0xaa, varsize);
@@ -7785,11 +7809,189 @@ somc_read_ta(somc_nv_item_t item, unsigned char *buf, int buf_len)
 			__FUNCTION__, somc_ta_paths[item],
 			d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
 		break;
+	case SOMC_TA_RSSI_2_4_G:
+		if (buf_len < SOMC_RSSI_2_4G_BUF_SIZE)
+			return -1;
+		d = (int *)buf;
+		if (sscanf(ta_buf,"%d:%d:%d:%d",
+			   &d[0], &d[1], &d[2], &d[3]) != 4) {
+			DHD_ERROR(("%s: rssi calibration parse error: %s\n",
+				   __FUNCTION__, somc_ta_paths[item]));
+			return -1;
+		}
+
+		printk("%s: rssi calibration in miscTA(%s),\n %d:%d:%d:%d\n",
+			__FUNCTION__, somc_ta_paths[item], d[0], d[1], d[2], d[3]);
+		break;
+	case SOMC_TA_RSSI_5G_W52:
+	case SOMC_TA_RSSI_5G_W53:
+	case SOMC_TA_RSSI_5G_W56:
+	case SOMC_TA_RSSI_5G_W58:
+		if (buf_len < SOMC_RSSI_5G_BUF_SIZE)
+			return -1;
+		d = (int *)buf;
+		if (sscanf(ta_buf,"%d:%d:%d:%d:%d:%d",
+			   &d[0], &d[1], &d[2], &d[3], &d[4], &d[5]) != 6) {
+			DHD_ERROR(("%s: rssi calibration parse error: %s\n",
+				   __FUNCTION__, somc_ta_paths[item]));
+			return -1;
+		}
+
+		printk("%s: rssi calibration in miscTA(%s),\n %d:%d:%d:%d:%d:%d\n",
+			__FUNCTION__, somc_ta_paths[item],
+			d[0], d[1], d[2], d[3], d[4], d[5]);
+		break;
 	default:
 		return -1;
 	}
 
 	return 0;
+}
+
+static int
+somc_rssi_apply_delta(const unsigned char *key, const int *delta, int delta_len,
+		      unsigned char *nvram, int nvram_len, int nvram_buf_size, int *stretch_len)
+{
+	unsigned char *end = nvram + nvram_len - 1;
+	unsigned char *k, *v, *t;
+	int r[SOMC_RSSI_5G_BUF_SIZE] = {0};
+	int i, len, orig_len;
+	char buf[30]; /* "-100,-100..." = 29 lengths */
+
+	if (!key || !delta || !nvram || !stretch_len ||
+		(delta_len != SOMC_RSSI_2_4G_BUF_SIZE && delta_len != SOMC_RSSI_5G_BUF_SIZE))
+		return -1;
+
+	/* look up key in nvram */
+	if ((k = strnstr(nvram, key, nvram_len)) == NULL) {
+		DHD_ERROR(("%s: key not found: %s\n", __FUNCTION__, key));
+		return -1;
+	}
+
+	/* extract value */
+	v = k + strlen(key);
+	if (v > end || *v != '=') {
+		DHD_ERROR(("%s: value parse error: %s\n", __FUNCTION__, key));
+		return -1;
+	}
+	v += 1;
+
+	if (v > end || (t = strnchr(v, end - v + 1, '\n')) == NULL) {
+		DHD_ERROR(("%s: value parse error: %s\n", __FUNCTION__, key));
+		return -1;
+	}
+
+	/* extract each values */
+	if (delta_len == SOMC_RSSI_5G_BUF_SIZE) {
+		if (sscanf(v, "%d,%d,%d,%d,%d,%d",
+			   &r[0], &r[1], &r[2], &r[3], &r[4], &r[5]) != delta_len) {
+			DHD_ERROR(("%s: rssi values parse error: %s\n", __FUNCTION__, key));
+			return -1;
+		}
+	} else { /* delta_len == SOMC_RSSI_2_4G_BUF_SIZE */
+		if (sscanf(v, "%d,%d,%d,%d",
+			   &r[0], &r[1], &r[2], &r[3]) != delta_len) {
+			DHD_ERROR(("%s: rssi values parse error: %s\n", __FUNCTION__, key));
+			return -1;
+		}
+	}
+
+	for (i = 0; i < delta_len; i++) {
+		r[i] += delta[i];
+		r[i] = r[i] > SCHAR_MAX ? SCHAR_MAX : (r[i] < SCHAR_MIN ? SCHAR_MIN : r[i]);
+	}
+
+	if (delta_len == SOMC_RSSI_5G_BUF_SIZE) {
+		snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d,%d",
+			r[0], r[1], r[2], r[3], r[4], r[5]);
+	} else {
+		snprintf(buf, sizeof(buf), "%d,%d,%d,%d",
+			r[0], r[1], r[2], r[3]);
+	}
+
+	len = strnlen(buf, sizeof(buf));
+	orig_len = t - v;
+	if (len == orig_len) {
+		strncpy(v, buf, orig_len);
+		*stretch_len = 0;
+	} else {
+		int gap = len - orig_len;
+		unsigned char *nil = end + 1;
+
+		/* check if buffer size is enough */
+		if (nvram_len + gap > nvram_buf_size) {
+			DHD_ERROR(("%s: insuffient buffer size: %d, %d\n",
+				   __FUNCTION__, orig_len, len));
+			return -1;
+		}
+
+		memmove(t + gap, t, nil - t);
+		strncpy(v, buf, len);
+		*(nil + gap) = '\0';
+		*stretch_len = gap;
+	}
+
+	return 0;
+}
+
+static int
+somc_rssi_calibrate(char *nvram, int nvram_len, int nvram_buf_size, int *stretch_len)
+{
+	int delta[SOMC_RSSI_5G_BUF_SIZE] = {0};
+	int len;
+
+	*stretch_len = 0;
+
+	/* 2.4GHz range */
+	if (somc_read_ta(SOMC_TA_RSSI_2_4_G, (char *)delta, sizeof(delta)) == 0) {
+		if (somc_rssi_apply_delta(SOMC_CKEY_RSSI_DELTA_2_4G, delta,
+					  SOMC_RSSI_2_4G_BUF_SIZE,
+					  nvram, nvram_len + *stretch_len,
+					  nvram_buf_size, &len) != 0)
+			goto fail;
+		*stretch_len += len;
+	}
+
+	/* 5GHz range */
+	if (somc_read_ta(SOMC_TA_RSSI_5G_W52, (char *)delta, sizeof(delta)) == 0) {
+		if (somc_rssi_apply_delta(SOMC_CKEY_RSSI_DELTA_5G_W52, delta,
+					  SOMC_RSSI_5G_BUF_SIZE,
+					  nvram, nvram_len + *stretch_len,
+					  nvram_buf_size, &len) != 0)
+			goto fail;
+		*stretch_len += len;
+	}
+
+	if (somc_read_ta(SOMC_TA_RSSI_5G_W53, (char *)delta, sizeof(delta)) == 0) {
+		if (somc_rssi_apply_delta(SOMC_CKEY_RSSI_DELTA_5G_W53, delta,
+					  SOMC_RSSI_5G_BUF_SIZE,
+					  nvram, nvram_len + *stretch_len,
+					  nvram_buf_size, &len) != 0)
+			goto fail;
+		*stretch_len += len;
+	}
+
+	if (somc_read_ta(SOMC_TA_RSSI_5G_W56, (char *)delta, sizeof(delta)) == 0) {
+		if (somc_rssi_apply_delta(SOMC_CKEY_RSSI_DELTA_5G_W56, delta,
+					  SOMC_RSSI_5G_BUF_SIZE,
+					  nvram, nvram_len + *stretch_len,
+					  nvram_buf_size, &len) != 0)
+			goto fail;
+		*stretch_len += len;
+	}
+
+	if (somc_read_ta(SOMC_TA_RSSI_5G_W58, (char *)delta, sizeof(delta)) == 0) {
+		if (somc_rssi_apply_delta(SOMC_CKEY_RSSI_DELTA_5G_W58, delta,
+					  SOMC_RSSI_5G_BUF_SIZE,
+					  nvram, nvram_len + *stretch_len,
+					  nvram_buf_size, &len) != 0)
+			goto fail;
+		*stretch_len += len;
+	}
+
+	return BCME_OK;
+fail:
+	return BCME_ERROR;
 }
 
 static int
@@ -8134,6 +8336,7 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 		memcpy(memblock, bus->nvram_params, len);
 	}
 	if (len > 0 && len < MAX_NVRAMBUF_SIZE) {
+		int stretch_len;
 		bufp = (char *)memblock;
 		bufp[len] = 0;
 
@@ -8141,6 +8344,13 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 			DHD_ERROR(("%s: error calibrating tx power\n", __FUNCTION__));
 			goto err;
 		}
+
+		if (somc_rssi_calibrate(memblock, len, MAX_NVRAMBUF_SIZE, &stretch_len)
+			!= BCME_OK) {
+			DHD_ERROR(("%s: error calibrating rssi\n", __FUNCTION__));
+			goto err;
+		}
+		len += stretch_len;
 
 		len = process_nvram_vars(bufp, len);
 		if (len % 4) {

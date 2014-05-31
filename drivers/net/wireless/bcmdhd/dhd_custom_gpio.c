@@ -297,7 +297,7 @@ const struct cntry_locales_custom translate_custom_table[] = {
 	{"BW", "BW", 0},
 	{"BY", "XZ", 11},
 	{"BZ", "BZ", 0},
-	{"CA", "CA", 31},
+	{"CA", "Q1", 77},
 	{"CD", "CD", 0},
 	{"CF", "CF", 0},
 	{"CG", "CG", 0},

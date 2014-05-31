@@ -3705,6 +3705,7 @@ wl_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev,
 
 	if (wl_cfgp2p_find_idx(wl, dev, &bssidx) != BCME_OK) {
 		WL_ERR(("Find p2p index from dev(%p) failed\n", dev));
+		kfree(ext_join_params);
 		return BCME_ERROR;
 	}
 	err = wldev_iovar_setbuf_bsscfg(dev, "join", ext_join_params, join_params_size,
