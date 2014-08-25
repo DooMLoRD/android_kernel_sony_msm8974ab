@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -134,6 +134,7 @@ struct msm_mdp_interface {
 	int (*splash_fnc) (struct msm_fb_data_type *mfd, int *index, int req);
 	struct msm_sync_pt_data *(*get_sync_fnc)(struct msm_fb_data_type *mfd,
 				const struct mdp_buf_sync *buf_sync);
+	void (*check_dsi_status)(struct work_struct *work, uint32_t interval);
 	void *private1;
 };
 
@@ -168,6 +169,9 @@ struct msm_fb_data_type {
 
 	u32 dest;
 	struct fb_info *fbi;
+
+	int idle_time;
+	struct delayed_work idle_notify_work;
 
 	int op_enable;
 	u32 fb_imgType;

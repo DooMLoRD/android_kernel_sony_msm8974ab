@@ -375,6 +375,7 @@ static ssize_t pn547_dev_set_pwr_store(struct device *dev,
 	struct pn547_dev *d = dev_get_drvdata(dev);
 	int state, ret = 0;
 
+	disable_irq(d->i2c_client->irq);
 	mutex_lock(&lock);
 	if (!strncmp(buf, set_pwr_cmds[PN547_SET_PWR_OFF], PAGE_SIZE)) {
 		dev_dbg(d->dev, "%s: PN547_SET_PWR_OFF\n", __func__);
@@ -390,7 +391,6 @@ static ssize_t pn547_dev_set_pwr_store(struct device *dev,
 		ret = -EINVAL;
 	}
 
-	disable_irq(d->i2c_client->irq);
 	if (!ret) {
 		ret = pn547_dev_chip_config(state, d);
 	    if (IS_ERR_VALUE(ret)) {
@@ -406,8 +406,8 @@ static ssize_t pn547_dev_set_pwr_store(struct device *dev,
 		dev_err(d->dev, "%s failed\n", __func__);
 	}
 exit:
-	enable_irq(d->i2c_client->irq);
 	mutex_unlock(&lock);
+	enable_irq(d->i2c_client->irq);
 	return strnlen(buf, PAGE_SIZE);
 }
 
