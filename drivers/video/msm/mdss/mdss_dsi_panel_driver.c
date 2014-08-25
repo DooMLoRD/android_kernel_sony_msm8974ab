@@ -291,9 +291,9 @@ static int mdss_dsi_panel_reset_seq(struct mdss_panel_data *pdata, int enable)
 	return 0;
 }
 
-void mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
+int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 {
-	mdss_dsi_panel_reset_seq(pdata, enable);
+	return mdss_dsi_panel_reset_seq(pdata, enable);
 }
 
 static char caset[] = {0x2a, 0x00, 0x00, 0x03, 0x00};	/* DTYPE_DCS_LWRITE */
@@ -382,6 +382,16 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		break;
 	case BL_DCS_CMD:
 		mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
+		if (mdss_dsi_is_master_ctrl(ctrl_pdata)) {
+			struct mdss_dsi_ctrl_pdata *sctrl =
+				mdss_dsi_get_slave_ctrl();
+			if (!sctrl) {
+				pr_err("%s: Invalid slave ctrl data\n",
+					__func__);
+				return;
+			}
+			mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+		}
 		break;
 	default:
 		pr_err("%s: Unknown bl_ctrl configuration\n",
@@ -862,7 +872,7 @@ static int mdss_dsi_panel_disp_on(struct mdss_panel_data *pdata)
 
 	if (ctrl_pdata->on_cmds.cmd_cnt && spec_pdata->disp_on_in_hs) {
 		pr_debug("%s: panel on sequence (in high speed)\n", __func__);
-		mdss_set_tx_power_mode(0, pdata);
+		mdss_dsi_set_tx_power_mode(0, pdata);
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &ctrl_pdata->on_cmds);
 	}
 	if (spec_pdata->cabc_deferred_on_cmds.cmd_cnt &&
@@ -902,7 +912,7 @@ static int mdss_dsi_panel_power_on_ex(struct mdss_panel_data *pdata, int enable)
 	ret = 0;
 	if (enable && !display_power_on) {
 		if (spec_pdata->down_period) {
-			u32 kt = (u32)ktime_to_ms(ktime_get());
+			u32 kt = (u32)ktime_to_ms(ktime_get_boottime());
 			kt = (kt < down) ? kt + ~down : kt - down;
 			if (kt < spec_pdata->down_period)
 				usleep_range((spec_pdata->down_period - kt) *
@@ -936,7 +946,7 @@ static int mdss_dsi_panel_power_on_ex(struct mdss_panel_data *pdata, int enable)
 				__func__, ret);
 		}
 		if (spec_pdata->down_period)
-			down = (u32)ktime_to_ms(ktime_get());
+			down = (u32)ktime_to_ms(ktime_get_boottime());
 		display_power_on = 0;
 	}
 error:
@@ -1526,6 +1536,35 @@ static int mdss_panel_dt_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
 	return rc;
 }
 
+static int mdss_dsi_parse_panel_features(struct device_node *np,
+	struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	struct mdss_panel_info *pinfo;
+
+	if (!np || !ctrl) {
+		pr_err("%s: Invalid arguments\n", __func__);
+		return -ENODEV;
+	}
+
+	pinfo = &ctrl->panel_data.panel_info;
+
+	pinfo->cont_splash_enabled = of_property_read_bool(np,
+		"qcom,cont-splash-enabled");
+
+	pinfo->partial_update_enabled = of_property_read_bool(np,
+		"qcom,partial-update-enabled");
+	pr_info("%s:%d Partial update %s\n", __func__, __LINE__,
+		(pinfo->partial_update_enabled ? "enabled" : "disabled"));
+	if (pinfo->partial_update_enabled)
+		ctrl->partial_update_fnc = mdss_dsi_panel_partial_update;
+
+	pinfo->ulps_feature_enabled = of_property_read_bool(np,
+		"qcom,ulps-enabled");
+	pr_info("%s: ulps feature %s", __func__,
+		(pinfo->ulps_feature_enabled ? "enabled" : "disabled"));
+
+	return 0;
+}
 
 static int mdss_dsi_parse_fbc_params(struct device_node *np,
 				struct mdss_panel_info *panel_info)
@@ -2145,6 +2184,13 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		spec_pdata->down_period = !rc ? tmp : 0;
 		break;
 	}
+
+	rc = mdss_dsi_parse_panel_features(next, ctrl_pdata);
+	if (rc) {
+		pr_err("%s: failed to parse panel features\n", __func__);
+		goto error;
+	}
+
 	return 0;
 
 error:
@@ -2158,9 +2204,14 @@ int mdss_dsi_panel_init(struct device_node *node,
 	int rc = 0;
 	char *path_name = "mdss_dsi_panel";
 	struct device_node *dsi_ctrl_np = NULL;
-	bool cont_splash_enabled;
-	bool partial_update_enabled;
+	struct mdss_panel_info *pinfo;
 	struct mdss_panel_specific_pdata *spec_pdata = NULL;
+
+	if (!node || !ctrl_pdata) {
+		pr_err("%s: Invalid arguments\n", __func__);
+		return -ENODEV;
+	}
+	pinfo = &ctrl_pdata->panel_data.panel_info;
 
 	dev_set_name(&virtdev, "%s", path_name);
 	rc = device_register(&virtdev);
@@ -2238,30 +2289,10 @@ exit_lcd_id:
 	if (rc)
 		goto error;
 
-	cont_splash_enabled = display_on_in_boot;
-
-	if (!cont_splash_enabled) {
-		pr_info("%s:%d Continuous splash flag not found.\n",
-				__func__, __LINE__);
-		ctrl_pdata->panel_data.panel_info.cont_splash_enabled = 0;
-	} else {
-		pr_info("%s:%d Continuous splash flag enabled.\n",
-				__func__, __LINE__);
-
-		ctrl_pdata->panel_data.panel_info.cont_splash_enabled = 1;
-	}
-
-	partial_update_enabled = of_property_read_bool(node,
-						"qcom,partial-update-enabled");
-	if (partial_update_enabled) {
-		pr_info("%s:%d Partial update enabled.\n", __func__, __LINE__);
-		ctrl_pdata->panel_data.panel_info.partial_update_enabled = 1;
-		ctrl_pdata->partial_update_fnc = mdss_dsi_panel_partial_update;
-	} else {
-		pr_info("%s:%d Partial update disabled.\n", __func__, __LINE__);
-		ctrl_pdata->panel_data.panel_info.partial_update_enabled = 0;
-		ctrl_pdata->partial_update_fnc = NULL;
-	}
+	if (!display_on_in_boot)
+		pinfo->cont_splash_enabled = false;
+	pr_info("%s: Continuous splash %s", __func__,
+		pinfo->cont_splash_enabled ? "enabled" : "disabled");
 
 	if (!adc_det) {
 		spec_pdata->detect = mdss_dsi_panel_detect;

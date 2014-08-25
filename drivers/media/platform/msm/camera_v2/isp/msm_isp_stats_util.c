@@ -369,11 +369,11 @@ static int msm_isp_stats_wait_for_cfg_done(struct vfe_device *vfe_dev)
 	init_completion(&vfe_dev->stats_config_complete);
 	atomic_set(&vfe_dev->stats_data.stats_update, 2);
 #if defined(CONFIG_SONY_CAM_V4L2)
-	rc = wait_for_completion_interruptible_timeout(
+	rc = wait_for_completion_timeout(
 		&vfe_dev->stats_config_complete,
 		msecs_to_jiffies(vfe_dev->timeout));
 #else
-	rc = wait_for_completion_interruptible_timeout(
+	rc = wait_for_completion_timeout(
 		&vfe_dev->stats_config_complete,
 		msecs_to_jiffies(VFE_MAX_CFG_TIMEOUT));
 #endif
