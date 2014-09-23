@@ -1,7 +1,7 @@
 /*
  *  linux/include/linux/mmc/host.h
  *
- * Copyright (c) 2013 Sony Mobile Communications AB.
+ * Copyright (c) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -199,6 +199,12 @@ struct mmc_hotplug {
 	void *handler_priv;
 };
 
+enum dev_state {
+	DEV_SUSPENDING = 1,
+	DEV_SUSPENDED,
+	DEV_RESUMED,
+};
+
 struct mmc_host {
 	struct device		*parent;
 	struct device		class_dev;
@@ -305,6 +311,9 @@ struct mmc_host {
 #define MMC_CAP2_CORE_PM	(1 << 23)       /* use PM framework */
 #define MMC_CAP2_HS400		(MMC_CAP2_HS400_1_8V | \
 				 MMC_CAP2_HS400_1_2V)
+#ifdef CONFIG_MMC_AWAKE_HS200
+#define MMC_CAP2_AWAKE_SUPP	(1 << 25)	/* use CMD5 awake */
+#endif
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 
 	int			clk_requests;	/* internal reference counter */
@@ -330,6 +339,9 @@ struct mmc_host {
 	spinlock_t		lock;		/* lock for claim and bus ops */
 
 	struct mmc_ios		ios;		/* current io bus settings */
+#ifdef CONFIG_MMC_AWAKE_HS200
+	struct mmc_ios		cached_ios;
+#endif
 	u32			ocr;		/* the current OCR setting */
 
 	/* group bitfields together to minimize padding */
@@ -412,7 +424,9 @@ struct mmc_host {
 	} perf;
 	bool perf_enable;
 #endif
+#ifndef CONFIG_MMC_AWAKE_HS200
 	struct mmc_ios saved_ios;
+#endif
 	struct {
 		unsigned long	busy_time_us;
 		unsigned long	window_time;
@@ -429,6 +443,7 @@ struct mmc_host {
 		struct delayed_work work;
 		enum mmc_load	state;
 	} clk_scaling;
+	enum dev_state dev_status;
 	unsigned long		private[0] ____cacheline_aligned;
 };
 

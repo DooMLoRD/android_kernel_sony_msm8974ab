@@ -1,5 +1,5 @@
 /* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (c) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -128,11 +128,6 @@ struct mdss_panel_recovery {
 				 - 1 clock enable
  * @MDSS_EVENT_ENABLE_PARTIAL_UPDATE: Event to update ROI of the panel.
  * @MDSS_EVENT_DSI_CMDLIST_KOFF: acquire dsi_mdp_busy lock before kickoff.
- * @MDSS_EVENT_DSI_ULPS_CTRL:	Event to configure Ultra Lower Power Saving
- *				mode for the DSI data and clock lanes. The
- *				event arguments can have one of these values:
- *				- 0: Disable ULPS mode
- *				- 1: Enable ULPS mode
  */
 enum mdss_intf_events {
 	MDSS_EVENT_RESET = 1,
@@ -151,7 +146,6 @@ enum mdss_intf_events {
 	MDSS_EVENT_PANEL_CLK_CTRL,
 	MDSS_EVENT_DSI_CMDLIST_KOFF,
 	MDSS_EVENT_ENABLE_PARTIAL_UPDATE,
-	MDSS_EVENT_DSI_ULPS_CTRL,
 };
 
 struct lcd_panel_info {
@@ -168,6 +162,25 @@ struct lcd_panel_info {
 	u32 xres_pad;
 	/* Pad height */
 	u32 yres_pad;
+	u32 fps_default;
+	u32 display_clock;
+	u32 driver_ic_vbp;
+	u32 driver_ic_vfp;
+	u32 chenge_wait_update;
+	u32 chenge_wait_on_60fps;
+	u32 chenge_wait_on_45fps;
+	u32 chenge_wait_off_60fps;
+	u32 chenge_wait_off_45fps;
+	u32 chenge_wait_on_cmds_num;
+	u32 chenge_wait_off_cmds_num;
+	u32 fps_threshold;
+	u32 te_c_update;
+	u32 te_c_mode_60fps_0;
+	u32 te_c_mode_60fps_1;
+	u32 te_c_mode_45fps_0;
+	u32 te_c_mode_45fps_1;
+	u32 te_c_cmds_num;
+	u32 te_c_payload_num;
 };
 
 
@@ -232,6 +245,8 @@ struct mipi_panel_info {
 
 	char lp11_init;
 	u32  init_delay;
+
+	int input_fpks;
 };
 
 struct edp_panel_info {
@@ -301,13 +316,13 @@ struct mdss_panel_info {
 	u32 roi_y;
 	u32 roi_w;
 	u32 roi_h;
+	u32 rev_u[2], rev_v[2];
 	int bklt_ctrl;	/* backlight ctrl */
 	int pwm_pmic_gpio;
 	int pwm_lpg_chan;
 	int pwm_period;
 	u32 mode_gpio_state;
 	bool dynamic_fps;
-	bool ulps_feature_enabled;
 	char dfps_update;
 	int new_fps;
 
@@ -327,7 +342,6 @@ struct mdss_panel_info {
 	struct mipi_panel_info mipi;
 	struct lvds_panel_info lvds;
 	struct edp_panel_info edp;
-
 	const char *panel_id_name;
 };
 

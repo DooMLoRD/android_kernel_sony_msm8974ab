@@ -11,7 +11,7 @@
  *  $Date:: 2011-10-26 13:33:02 +0900#$ Date of last commit
  *
  *              Copyright (C) 2011 by Panasonic Co., Ltd.
- *              Copyright (C) 2012-2013 Sony Mobile Communications AB.
+ *              Copyright (C) 2012 Sony Mobile Communications Inc.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -38,6 +38,12 @@
  *                004 fix power leakages from GPIOs
  *              : 2013/11/27    T.Ooka(*)
  *                005 modified some formats
+ *              : 2014/02/10    T.Ooka(*)
+ *                006 smt-ej12x adaptation
+ *              : 2014/04/21    T.Ooka(*)
+ *                007 ANT switch adaptation
+ *              : 2014/08/01    T.Ooka(*)
+ *                008 Add product switch
  ******************************************************************************/
 #include <asm/irq.h>
 #include <linux/cdev.h>
@@ -70,23 +76,39 @@
 #define D_TUNER_CONFIG_PLATFORM_DRIVER_NAME "mmtuner_pdev"
 #define D_TUNER_CONFIG_SYSFS_DEV_NAME       "mmtuner_pdev"
 #define D_TUNER_CONFIG_CLASS_NAME           "mmtuner"
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 #define D_TUNER_CONFIG_MATCH_TABLE          "sony,ej113"
+
+#define D_TUNER_CONFIG_DRV_MAJOR              100
+#define D_TUNER_CONFIG_DRV_MINOR              200
+#define D_TUNER_POWER_CHECK_WAIT_US         10000
+#define D_TUNER_POWER_CHECK_WAIT_RANGE_US   10100
+#define D_TUNER_POWER_ON_WAIT_US            15000
+#define D_TUNER_POWER_ON_WAIT_RANGE_US      15100
+#define D_TUNER_RESET_ON_WAIT_US             5000
+#define D_TUNER_RESET_ON_WAIT_RANGE_US       5100
+#define D_TUNER_RESET_OFF_WAIT_US            1000
+#define D_TUNER_RESET_OFF_WAIT_RANGE_US      1100
+#define D_TUNER_POWER_OFF_WAIT_US            5000
+#define D_TUNER_POWER_OFF_WAIT_RANGE_US      5100
+#define D_TUNER_ANT_SWITCH_ON                   1
+#define D_TUNER_ANT_SWITCH_OFF                  0
+#define D_TUNER_I2C_ADAPTER_ID                 11
+#else
+#define D_TUNER_CONFIG_MATCH_TABLE          "sony,ej121"
 
 #define D_TUNER_CONFIG_DRV_MAJOR             100
 #define D_TUNER_CONFIG_DRV_MINOR             200
-#define D_TUNER_POWER_CHECK_WAIT_US        10000
-#define D_TUNER_POWER_CHECK_WAIT_RANGE_US  10100
-#define D_TUNER_POWER_ON_WAIT_US           15000
-#define D_TUNER_POWER_ON_WAIT_RANGE_US     15100
-#define D_TUNER_RESET_ON_WAIT_US            5000
-#define D_TUNER_RESET_ON_WAIT_RANGE_US      5100
+#define D_TUNER_POWER_ON_WAIT_US            3000
+#define D_TUNER_POWER_ON_WAIT_RANGE_US      3100
+#define D_TUNER_RESET_ON_WAIT_US            1000
+#define D_TUNER_RESET_ON_WAIT_RANGE_US      1100
 #define D_TUNER_RESET_OFF_WAIT_US           1000
 #define D_TUNER_RESET_OFF_WAIT_RANGE_US     1100
-#define D_TUNER_POWER_OFF_WAIT_US           5000
-#define D_TUNER_POWER_OFF_WAIT_RANGE_US     5100
 #define D_TUNER_ANT_SWITCH_ON                  1
 #define D_TUNER_ANT_SWITCH_OFF                 0
-#define D_TUNER_I2C_ADAPTER_ID                 4
+#define D_TUNER_I2C_ADAPTER_ID                11
+#endif
 
 enum gpio_id {
 	ANT_POWER_PIN = 0,
@@ -241,8 +263,10 @@ static int tuner_drv_ctl_power(struct tuner_drvdata *drvdata, int data)
 		usleep_range(D_TUNER_RESET_OFF_WAIT_US,
 			D_TUNER_RESET_OFF_WAIT_RANGE_US);
 		isdbt_tunerpm_reset_control(drvdata, 0);
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 		usleep_range(D_TUNER_POWER_OFF_WAIT_US,
 			D_TUNER_POWER_OFF_WAIT_RANGE_US);
+#endif
 		isdbt_tunerpm_power_control(drvdata, 0);
 		mutex_unlock(&drvdata->mutex_lock);
 		break;
@@ -501,6 +525,7 @@ static int tuner_probe(struct platform_device *pdev)
 	mutex_init(&tnr_dev.g_tuner_mutex);
 	init_waitqueue_head(&tnr_dev.irq_wait_q);
 
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 	ret = tuner_drv_ctl_power(drvdata, TUNER_DRV_CTL_POWON);
 	if (ret)
 		goto err_check_power;
@@ -512,6 +537,7 @@ static int tuner_probe(struct platform_device *pdev)
 	usleep_range(D_TUNER_POWER_CHECK_WAIT_US,
 		D_TUNER_POWER_CHECK_WAIT_RANGE_US);
 	tuner_drv_ctl_power(drvdata, TUNER_DRV_CTL_POWOFF);
+#endif
 
 	if (tuner_drv_set_interrupt(drvdata->gpios[TUNER_INT_PIN]))
 		goto err_irq_set;
@@ -519,7 +545,9 @@ static int tuner_probe(struct platform_device *pdev)
 	return 0;
 
 err_irq_set:
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 err_check_power:
+#endif
 err_create_file:
 err_gpio_init:
 	i2c_put_adapter(drvdata->adap);
@@ -564,7 +592,11 @@ static void tuner_shutdown(struct platform_device *pdev)
 	platform_device_unregister(tnr_dev.mmtuner_device);
 }
 
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 static struct of_device_id ej113_match_table[] = {
+#else
+static struct of_device_id ej121_match_table[] = {
+#endif
 {	.compatible = D_TUNER_CONFIG_MATCH_TABLE,
 },
 {}
@@ -577,7 +609,11 @@ static struct platform_driver mmtuner_driver = {
 	.driver = {
 		.name = D_TUNER_CONFIG_PLATFORM_DRIVER_NAME,
 		.owner = THIS_MODULE,
+#ifdef CONFIG_ISDBT_TUNER_SMTEJ11X
 		.of_match_table = ej113_match_table,
+#else
+		.of_match_table = ej121_match_table,
+#endif
 	},
 };
 

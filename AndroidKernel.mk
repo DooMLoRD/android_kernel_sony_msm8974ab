@@ -27,6 +27,7 @@ KERNEL_USE_OF ?= $(shell $(PERL) -e '$$of = "n"; while (<>) { if (/CONFIG_USE_OF
 ifeq "$(KERNEL_USE_OF)" "y"
 ifeq "$(USE_SOMC_BOARD)" "y"
 DTS_FILES = $(wildcard $(TOP)/kernel/arch/arm/boot/dts/$(DTS_NAME)*$(SOMC_BOARD).dts)
+DTS_FILES += $(foreach ADD_PROD, $(SOMC_ADDITIONAL_SUPPORT_PRODUCTS), $(wildcard $(TOP)/kernel/arch/arm/boot/dts/$(DTS_NAME)*$(SOMC_BOARD)_$(ADD_PROD).dts))
 else
 DTS_FILES = $(wildcard $(TOP)/kernel/arch/arm/boot/dts/$(DTS_NAME)*.dts)
 endif

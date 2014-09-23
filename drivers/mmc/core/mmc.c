@@ -4,7 +4,7 @@
  *  Copyright (C) 2003-2004 Russell King, All Rights Reserved.
  *  Copyright (C) 2005-2007 Pierre Ossman, All Rights Reserved.
  *  MMCv4 support Copyright (C) 2006 Philip Langdale, All Rights Reserved.
- *  Copyright (C) 2013 Sony Mobile Communications AB.
+ *  Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -73,9 +73,6 @@ static const struct mmc_fixup mmc_fixups[] = {
 	 * show this behavior is identified.
 	 */
 	MMC_FIXUP("H8G2d", CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_CACHE_DISABLE),
-
-	MMC_FIXUP("MMC16G", CID_MANFID_KINGSTON, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_CACHE_DISABLE),
 
 	END_FIXUP
@@ -1049,7 +1046,11 @@ static int mmc_select_hs200(struct mmc_card *card, u8 *ext_csd)
 
 	/* switch to HS200 mode if bus width set successfully */
 	err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+#ifndef CONFIG_MMC_DEV_DRV_STR_TYPE4
 				EXT_CSD_HS_TIMING, 2, 0);
+#else
+				EXT_CSD_HS_TIMING, 66, 0); /* for ShinanoR2 */
+#endif
 
 	if (err && err != -EBADMSG) {
 		pr_err("%s: HS200 switch failed\n",
@@ -1157,7 +1158,11 @@ static int mmc_select_hs400(struct mmc_card *card, u8 *ext_csd)
 
 	/* Switch to HS400 mode if bus width set successfully */
 	err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+#ifndef CONFIG_MMC_DEV_DRV_STR_TYPE4
 				 EXT_CSD_HS_TIMING, 3, 0);
+#else
+				 EXT_CSD_HS_TIMING, 67, 0); /* for ShinanoR2 */
+#endif
 	if (err && err != -EBADMSG) {
 		pr_err("%s: Setting HS_TIMING to HS400 failed (err:%d)\n",
 			mmc_hostname(host), err);
@@ -1259,8 +1264,7 @@ static int mmc_change_bus_speed(struct mmc_host *host, unsigned long *freq)
 		mmc_set_clock(host, (unsigned int) (*freq));
 	}
 
-	if ((mmc_card_hs400(card) || mmc_card_hs200(card))
-		&& card->host->ops->execute_tuning) {
+	if (mmc_card_hs200(card) && card->host->ops->execute_tuning) {
 		/*
 		 * We try to probe host driver for tuning for any
 		 * frequency, it is host driver responsibility to
@@ -1590,11 +1594,6 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			card->ext_csd.cache_ctrl = 1;
 		}
 	}
-	if (card->quirks & MMC_QUIRK_CACHE_DISABLE) {
-		pr_warn("%s: This is Hynix card, cache disabled!\n",
-				mmc_hostname(card->host));
-		card->ext_csd.cache_ctrl = 0;
-	}
 
 	if ((host->caps2 & MMC_CAP2_PACKED_WR &&
 			card->ext_csd.max_packed_writes > 0) ||
@@ -1655,6 +1654,9 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	if (!oldcard)
 		host->card = card;
 
+#ifdef CONFIG_MMC_AWAKE_HS200
+	memcpy(&host->cached_ios, &host->ios, sizeof(host->cached_ios));
+#endif
 	return 0;
 
 free_card:
@@ -1718,11 +1720,12 @@ static void mmc_remove(struct mmc_host *host)
 	BUG_ON(!host->card);
 
 	unregister_reboot_notifier(&host->card->reboot_notify);
+
+	mmc_exit_clk_scaling(host);
 	mmc_remove_card(host->card);
 
 	mmc_claim_host(host);
 	host->card = NULL;
-	mmc_exit_clk_scaling(host);
 	mmc_release_host(host);
 }
 
@@ -1771,6 +1774,7 @@ static void mmc_detect(struct mmc_host *host)
 	}
 }
 
+#ifndef CONFIG_MMC_AWAKE_HS200
 /*
  * Save ios setting
  */
@@ -1796,6 +1800,7 @@ static void mmc_restore_ios(struct mmc_host *host)
 
 	mmc_set_ios(host);
 }
+#endif
 
 /*
  * Suspend callback from host.
@@ -1819,7 +1824,9 @@ static int mmc_suspend(struct mmc_host *host)
 	if (err)
 		goto out;
 
+#ifndef CONFIG_MMC_AWAKE_HS200
 	mmc_save_ios(host);
+#endif
 	if (mmc_card_can_sleep(host)) {
 		err = mmc_card_sleep(host);
 		if (!err)
@@ -1832,6 +1839,42 @@ out:
 	mmc_release_host(host);
 	return err;
 }
+
+#ifdef CONFIG_MMC_AWAKE_HS200
+static int mmc_partial_init(struct mmc_host *host)
+{
+	int err = 0;
+	struct mmc_card *card = host->card;
+	u32 tuning_cmd;
+
+	pr_debug("%s: %s: bw: %d timing: %d clock: %d\n", mmc_hostname(host),
+		__func__,  host->cached_ios.bus_width,  host->cached_ios.timing,
+		host->cached_ios.clock);
+
+	mmc_set_bus_width(host, host->cached_ios.bus_width);
+	mmc_set_timing(host, host->cached_ios.timing);
+	mmc_set_clock(host, host->cached_ios.clock);
+
+	if (host->ops->execute_tuning && (mmc_card_hs200(card) ||
+					  mmc_card_hs400(card))) {
+		mmc_host_clk_hold(host);
+
+		if (mmc_card_hs200(card))
+			tuning_cmd = MMC_SEND_TUNING_BLOCK_HS200;
+		else if (mmc_card_hs400(card))
+			tuning_cmd = MMC_SEND_TUNING_BLOCK_HS400;
+
+		err = host->ops->execute_tuning(host,
+				tuning_cmd);
+
+		mmc_host_clk_release(host);
+	}
+	if (err)
+		pr_err("%s: tuning execution failed\n",
+			   mmc_hostname(host));
+	return err;
+}
+#endif
 
 /*
  * Resume callback from host.
@@ -1847,11 +1890,41 @@ static int mmc_resume(struct mmc_host *host)
 	BUG_ON(!host->card);
 
 	mmc_claim_host(host);
+
+#ifdef CONFIG_MMC_AWAKE_HS200
+	if (host->caps2 & MMC_CAP2_AWAKE_SUPP) {
+		err = mmc_card_awake(host);
+		if (err) {
+			pr_err("%s: %s: failed (%d) awake using CMD5\n",
+			       mmc_hostname(host),  __func__, err);
+			err = mmc_init_card(host, host->ocr, host->card);
+		} else {
+			err = mmc_partial_init(host);
+			if (err) {
+				pr_err("%s: %s: faild (%d) partial_init\n",
+					mmc_hostname(host), __func__, err);
+				err = mmc_init_card(host, host->ocr,
+							host->card);
+				goto out;
+			}
+			err = mmc_cache_ctrl(host, 1);
+			if (err) {
+				pr_err("%s: %s: faild (%d) cache_ctrl\n",
+					mmc_hostname(host), __func__, err);
+			}
+		}
+	} else {
+		err = mmc_init_card(host, host->ocr, host->card);
+
+	}
+out:
+#else
 	if (mmc_card_is_sleep(host->card)) {
 		mmc_restore_ios(host);
 		err = mmc_card_awake(host);
 	} else
 		err = mmc_init_card(host, host->ocr, host->card);
+#endif
 	mmc_release_host(host);
 
 	/*

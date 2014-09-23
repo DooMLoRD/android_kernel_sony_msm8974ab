@@ -123,12 +123,15 @@ static int bcm4339_bt_rfkill_set_power(void *data, bool blocked)
 			regulator_enable(bt_batfet);
 		gpio_set_value(bcm4339_my_data->gpios[BT_DEV_WAKE_PIN], 1);
 		gpio_set_value(bcm4339_my_data->gpios[BT_REG_ON_PIN], 1);
+		gpio_request(bcm4339_my_data->gpios[BT_HOST_WAKE_PIN],
+			"BT_HOST_WAKE"); /* NO_PULL */
 	} else {
 		if (!regOnGpio) {
 			BT_DBG("Bluetooth device is already power off:%d\n",
 				regOnGpio);
 			return 0;
 		}
+		gpio_free(bcm4339_my_data->gpios[BT_HOST_WAKE_PIN]); /* PULL_DOWN */
 		gpio_set_value(bcm4339_my_data->gpios[BT_REG_ON_PIN], 0);
 		if (bt_batfet)
 			regulator_disable(bt_batfet);
@@ -292,8 +295,10 @@ static int bcm_bt_lpm_init(struct platform_device *pdev)
 static void bcm4339_bluetooth_free_gpio(void)
 {
 	int i;
-	for (i = 0; i < ARRAY_SIZE(req_ids); i++)
-		gpio_free(bcm4339_my_data->gpios[req_ids[i]]);
+	for (i = 0; i < ARRAY_SIZE(req_ids); i++) {
+		if (req_ids[i] != BT_HOST_WAKE_PIN)
+			gpio_free(bcm4339_my_data->gpios[req_ids[i]]);
+	}
 };
 
 static int bcm4339_bluetooth_dev_init(struct platform_device *pdev,
@@ -315,20 +320,24 @@ static int bcm4339_bluetooth_dev_init(struct platform_device *pdev,
 		my_data->gpios[i] = gpio;
 	}
 	for (i = 0; i < ARRAY_SIZE(req_ids); i++) {
-		ret = gpio_request(my_data->gpios[req_ids[i]],
-				gpio_rsrcs[req_ids[i]]);
-		if (ret) {
-			dev_err(&pdev->dev, "%s: request err %s: %d\n",
-				__func__, gpio_rsrcs[req_ids[i]], ret);
-			goto error_gpio_request;
+		if (req_ids[i] != BT_HOST_WAKE_PIN) {
+			ret = gpio_request(my_data->gpios[req_ids[i]],
+					gpio_rsrcs[req_ids[i]]);
+			if (ret) {
+				dev_err(&pdev->dev, "%s: request err %s: %d\n",
+					__func__, gpio_rsrcs[req_ids[i]], ret);
+				goto error_gpio_request;
+			}
 		}
 	}
 
 	return 0;
 
 error_gpio_request:
-	for (; i >= 0; --i)
-		gpio_free(my_data->gpios[req_ids[i]]);
+	for (; i >= 0; --i) {
+		if (req_ids[i] != BT_HOST_WAKE_PIN)
+			gpio_free(my_data->gpios[req_ids[i]]);
+	}
 error_gpio:
 	return ret;
 

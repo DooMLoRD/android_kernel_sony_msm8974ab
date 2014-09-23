@@ -4,37 +4,6 @@
 
 menu "Misc devices"
 
-config SONY_JPROBE_PM
-	tristate "Idd PM jprobe driver"
-	depends on KPROBES && m
-	default n
-	help
-	  If you say yes here you will get idd pm_jprobe module
-	  that traces suspend / resume times. Buffer is exported
-	  in /sys/kernel/idd_jprobe_pm/probe path. This will be
-	  compiled as module only.
-
-config SONY_JPROBE_LMK
-	tristate "Idd low memory killer jprobe driver"
-	depends on KPROBES && m
-	select SONY_JPROBE_LMK_HOOK
-	default n
-	help
-	  If you say yes here you will get idd lowmemkiller_jprobe module
-	  that monitors what tasks were killed. Buffer is exported in
-	  /sys/kernel/idd_jprobe_lmk path. This will be compiled as module
-	  only.
-
-config SONY_JPROBE_LMK_HOOK
-	bool "Idd low memory killer jprobe hook"
-	depends on SONY_JPROBE_LMK
-	default n
-	help
-	  If you say yes here you will add idd lowmemkiller_jprobe hook
-	  that is required if you want to use jprobe for Low memory killer.
-	  This is needed as JPROBE registered at memory shrink routine
-	  doesn't provide enough information in its arguments.
-
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
@@ -762,18 +731,38 @@ config ONESEG_TUNER_SMTVJ18X
 	help
 	  Select this module to enable 1seg Tuner Driver which supports
 	  1seg contents viewing.
-	  This module controls power and reset of SMT-VEJ18x and supports
-	  the ANT which is equiped as default.
+	  This module controls power switching and reset switching of
+	  SMT-VJ18x.
 
-config ISDBT_TUNER_SMTEJ11X
-	tristate "ISDBT/Tmm tuner driver for SMT-EJ11x"
+config ONESEG_TUNER_SMTVJ19X
+	tristate "ONESEG tuner driver for SMT-VJ19x"
 	default n
 	depends on I2C
 	help
-	  Select this module to enable ISDBT/Tmm Tuner Driver which
-	  supports ISDBT/Tmm contents viewing(1seg, Fullseg, Nottv).
-	  This module controls power and reset of SMT-EJ11x and controls
-	  reception ANT switching.
+	  Select this module to enable 1seg Tuner Driver which supports
+	  1seg contents viewing.
+	  This module controls power switching and reset switching of
+	  SMT-VJ19x.
+
+config ISDBT_TUNER_SMTEJ11X
+	tristate "ISDB-T/Tmm tuner driver for SMT-EJ11x"
+	default n
+	depends on I2C
+	help
+	  Select this module to enable ISDB-T/Tmm Tuner Driver which
+	  supports ISDB-T/Tmm contents viewing(1seg, Fullseg, Nottv).
+	  This module controls power switching and reset switching of
+	  SMT-EJ11x.
+
+config ISDBT_TUNER_SMTEJ12X
+	tristate "ISDB-T/Tmm tuner driver for SMT-EJ12x"
+	default n
+	depends on I2C
+	help
+	  Select this module to enable ISDB-T/Tmm Tuner Driver which
+	  supports ISDB-T/Tmm contents viewing(1seg, Fullseg, Nottv).
+	  This module controls power switching and reset switching of
+	  SMT-EJ12x.
 
 config IR_REMOTE
 	bool "MAXQ614 IR Remote control"

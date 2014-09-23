@@ -145,6 +145,10 @@ struct quot_adjust_info {
 	int quot_adjust;
 };
 
+static const char * const vdd_apc_name[] =	{"vdd-apc-optional-prim",
+						"vdd-apc-optional-sec",
+						"vdd-apc"};
+
 enum voltage_change_dir {
 	NO_CHANGE,
 	DOWN,
@@ -177,6 +181,7 @@ struct cpr_regulator {
 	int			vdd_mx_vmax;
 	int			vdd_mx_vmin_method;
 	int			vdd_mx_vmin;
+	int			vdd_mx_corner_map[CPR_FUSE_CORNER_MAX];
 
 	/* CPR parameters */
 	u64		cpr_fuse_bits;
@@ -516,6 +521,9 @@ static int cpr_mx_get(struct cpr_regulator *cpr_vreg, int corner, int apc_volt)
 		break;
 	case VDD_MX_VMIN_MX_VMAX:
 		vdd_mx = cpr_vreg->vdd_mx_vmax;
+		break;
+	case VDD_MX_VMIN_APC_CORNER_MAP:
+		vdd_mx = cpr_vreg->vdd_mx_corner_map[fuse_corner];
 		break;
 	default:
 		vdd_mx = 0;
@@ -1215,11 +1223,17 @@ static int __devinit cpr_apc_init(struct platform_device *pdev,
 			       struct cpr_regulator *cpr_vreg)
 {
 	struct device_node *of_node = pdev->dev.of_node;
-	int rc;
+	int i, rc = 0;
 
-	cpr_vreg->vdd_apc = devm_regulator_get(&pdev->dev, "vdd-apc");
-	if (IS_ERR_OR_NULL(cpr_vreg->vdd_apc)) {
+	for (i = 0; i < ARRAY_SIZE(vdd_apc_name); i++) {
+		cpr_vreg->vdd_apc = devm_regulator_get(&pdev->dev,
+					vdd_apc_name[i]);
 		rc = PTR_RET(cpr_vreg->vdd_apc);
+		if (!IS_ERR_OR_NULL(cpr_vreg->vdd_apc))
+			break;
+	}
+
+	if (rc) {
 		if (rc != -EPROBE_DEFER)
 			pr_err("devm_regulator_get: rc=%d\n", rc);
 		return rc;
@@ -1252,11 +1266,23 @@ static int __devinit cpr_apc_init(struct platform_device *pdev,
 			pr_err("vdd-mx-vmin-method missing: rc=%d\n", rc);
 			return rc;
 		}
-		if (cpr_vreg->vdd_mx_vmin_method > VDD_MX_VMIN_MX_VMAX) {
+		if (cpr_vreg->vdd_mx_vmin_method > VDD_MX_VMIN_APC_CORNER_MAP) {
 			pr_err("Invalid vdd-mx-vmin-method(%d)\n",
 				cpr_vreg->vdd_mx_vmin_method);
 			return -EINVAL;
 		}
+
+		rc = of_property_read_u32_array(of_node,
+					"qcom,vdd-mx-corner-map",
+					&cpr_vreg->vdd_mx_corner_map[1],
+					CPR_FUSE_CORNER_MAX - 1);
+		if (rc && cpr_vreg->vdd_mx_vmin_method ==
+			VDD_MX_VMIN_APC_CORNER_MAP) {
+			pr_err("qcom,vdd-mx-corner-map missing: rc=%d\n",
+				rc);
+			return rc;
+		}
+
 	}
 
 	return 0;

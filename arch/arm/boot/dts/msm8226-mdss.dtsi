@@ -19,7 +19,7 @@
 		interrupts = <0 72 0>;
 		vdd-supply = <&gdsc_mdss>;
 
-		qcom,max-bandwidth-low-kbps = <1660000>;
+		qcom,max-bandwidth-low-kbps = <1100000>;
 		qcom,max-bandwidth-high-kbps = <1660000>;
 
 		/* Bus Scale Settings */
@@ -48,6 +48,10 @@
 		qcom,mdss-pipe-rgb-xin-id = <1>;
 		qcom,mdss-pipe-dma-xin-id = <2>;
 
+		qcom,mdss-pipe-vig-clk-ctrl-offsets = <0x3AC 0 0>;
+		qcom,mdss-pipe-rgb-clk-ctrl-offsets = <0x3AC 4 8>;
+		qcom,mdss-pipe-dma-clk-ctrl-offsets = <0x3AC 8 12>;
+
 		qcom,mdss-smp-data = <7 4096>;
 
 		qcom,mdss-no-lut-read;
@@ -60,6 +64,7 @@
 		qcom,mdss-wb-off = <0x00011100 0x00013100>;
 		qcom,mdss-intf-off = <0x00000000 0x00021300>;
 		qcom,mdss-rot-block-size = <64>;
+		qcom,mdss-rotator-ot-limit = <2>;
 		qcom,mdss-smp-mb-per-pipe = <3>;
 		vdd-cx-supply = <&pm8226_s1_corner>;
 
@@ -96,10 +101,7 @@
 		compatible = "qcom,mdss-dsi-ctrl";
 		label = "MDSS DSI CTRL->0";
 		cell-index = <0>;
-		reg = 	<0xfd922800 0x1f8>,
-			<0xfd922b00 0x2b0>,
-			<0xfd828000 0x108>;
-		reg-names = "dsi_ctrl", "dsi_phy", "mmss_misc_phys";
+		reg = <0xfd922800 0x600>;
 		qcom,mdss-fb-map = <&mdss_fb0>;
 		qcom,mdss-mdp = <&mdss_mdp>;
 		vdd-supply = <&pm8226_l15>;

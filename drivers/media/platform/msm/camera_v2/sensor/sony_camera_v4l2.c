@@ -57,6 +57,7 @@
 #define MODULE_APT00YP1		"APT00YP1"
 #define MODULE_STW00YP1		"STW00YP1"
 #define CAMERA_DEV_NAME		"sony_camera_%d"
+#define CAPS_MAX_STR_LEN	32
 
 struct sony_camera_data {
 	bool				probe_done;
@@ -79,6 +80,13 @@ struct camera_dev_info {
 	uint32_t			mount_angle;
 	uint32_t			sensor_rotation;
 	uint32_t			sensor_facing;
+	uint32_t			pixel_number_w;
+	uint32_t			pixel_number_h;
+	char				diagonal_len[CAPS_MAX_STR_LEN];
+	char				unit_cell_size[CAPS_MAX_STR_LEN];
+	char				min_f_number[CAPS_MAX_STR_LEN];
+	char				max_f_number[CAPS_MAX_STR_LEN];
+	uint32_t			has_focus_actuator;
 	uint32_t			has_3a;
 	uint32_t			eeprom_size;
 	uint8_t				eeprom[EEPROM_MAX_DATA_LEN];
@@ -99,7 +107,7 @@ static struct msm_cam_clk_info cam_clk_info[] = {
 static int32_t sony_util_get_context(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	uint16_t i;
-	char sensor_name[32];
+	char sensor_name[CAPS_MAX_STR_LEN];
 
 	memset(sensor_name, 0, sizeof(sensor_name));
 	for (i = 0; i < sensor_num; i++) {
@@ -238,6 +246,73 @@ static int sony_util_camera_info_init(struct platform_device *pdev, uint16_t id)
 		rc = of_property_read_u32(of_node_modules,
 				"sensor_facing",
 				&camera_info[id].modules[i].sensor_facing);
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_u32(of_node_modules,
+				"pixel_number_w",
+				&camera_info[id].modules[i].pixel_number_w);
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_u32(of_node_modules,
+				"pixel_number_h",
+				&camera_info[id].modules[i].pixel_number_h);
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_string(of_node_modules,
+				"diagonal_len",
+				(const char **)(
+				&camera_info[id].modules[i].diagonal_len));
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_string(of_node_modules,
+				"unit_cell_size",
+				(const char **)(
+				&camera_info[id].modules[i].unit_cell_size));
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_string(of_node_modules,
+				"min_f_number",
+				(const char **)(
+				&camera_info[id].modules[i].min_f_number));
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_string(of_node_modules,
+				"max_f_number",
+				(const char **)(
+				&camera_info[id].modules[i].max_f_number));
+
+		if (rc < 0) {
+			LOGE("%s failed %d\n", __func__, __LINE__);
+			goto fail;
+		}
+
+		rc = of_property_read_u32(of_node_modules,
+				"has_focus_actuator",
+				&camera_info[id].modules[i].has_focus_actuator);
 
 		if (rc < 0) {
 			LOGE("%s failed %d\n", __func__, __LINE__);
@@ -418,8 +493,10 @@ static int sony_util_gpio_init(struct msm_sensor_ctrl_t *s_ctrl)
 
 	if (!camera_data[id].gpio_requested) {
 		rc = msm_camera_request_gpio_table(
-			s_ctrl->sensordata->gpio_conf->cam_gpio_req_tbl,
-			s_ctrl->sensordata->gpio_conf->cam_gpio_req_tbl_size,
+			s_ctrl->sensordata->power_info
+				.gpio_conf->cam_gpio_req_tbl,
+			s_ctrl->sensordata->power_info
+				.gpio_conf->cam_gpio_req_tbl_size,
 			1);
 		if (rc == 0)
 			camera_data[id].gpio_requested = true;
@@ -435,8 +512,10 @@ static int sony_util_gpio_deinit(struct msm_sensor_ctrl_t *s_ctrl)
 
 	if (camera_data[id].gpio_requested) {
 		rc = msm_camera_request_gpio_table(
-			s_ctrl->sensordata->gpio_conf->cam_gpio_req_tbl,
-			s_ctrl->sensordata->gpio_conf->cam_gpio_req_tbl_size,
+			s_ctrl->sensordata->power_info
+				.gpio_conf->cam_gpio_req_tbl,
+			s_ctrl->sensordata->power_info
+				.gpio_conf->cam_gpio_req_tbl_size,
 			0);
 		camera_data[id].gpio_requested = false;
 	}
@@ -732,7 +811,8 @@ static int sony_util_power_ctrl(struct msm_sensor_ctrl_t *s_ctrl,
 		case SONY_GPIO_RESET:
 			rc = sony_util_gpio_set(s_ctrl,
 				s_ctrl->sensordata
-					->gpio_conf->cam_gpio_req_tbl[1].gpio,
+					->power_info.gpio_conf
+						->cam_gpio_req_tbl[1].gpio,
 				seq->val1);
 			break;
 		case SONY_GPIO_AF:
@@ -777,15 +857,14 @@ exit:
 static ssize_t sony_camera_info_read(struct device *ldev,
 		struct device_attribute *attr, char *buf)
 {
-	char sensor_name[32];
+	char sensor_name[CAPS_MAX_STR_LEN];
 	int id = 0;
 	uint16_t info_len = 0;
 	struct camera_dev_info *info = (struct camera_dev_info *)buf;
 
 	memset(sensor_name, 0, sizeof(sensor_name));
 	for (id = 0; id < sensor_num; id++) {
-		snprintf(sensor_name, sizeof(sensor_name),
-				CAMERA_DEV_NAME, id);
+		snprintf(sensor_name, sizeof(sensor_name), CAMERA_DEV_NAME, id);
 		if (!strncmp(ldev->kobj.name,
 			sensor_name, sizeof(sensor_name))) {
 			info->mount_angle =
@@ -794,6 +873,32 @@ static ssize_t sony_camera_info_read(struct device *ldev,
 				camera_data[id].module->sensor_rotation;
 			info->sensor_facing =
 				camera_data[id].module->sensor_facing;
+			info->pixel_number_w =
+				camera_data[id].module->pixel_number_w;
+			info->pixel_number_h =
+				camera_data[id].module->pixel_number_h;
+			memset(info->diagonal_len, 0,
+				sizeof(info->diagonal_len));
+			strlcpy(info->diagonal_len,
+				camera_data[id].module->diagonal_len,
+				sizeof(info->diagonal_len));
+			memset(info->unit_cell_size, 0,
+				sizeof(info->unit_cell_size));
+			strlcpy(info->unit_cell_size,
+				camera_data[id].module->unit_cell_size,
+				sizeof(info->unit_cell_size));
+			memset(info->min_f_number, 0,
+				sizeof(info->min_f_number));
+			strlcpy(info->min_f_number,
+				camera_data[id].module->min_f_number,
+				sizeof(info->min_f_number));
+			memset(info->max_f_number, 0,
+				sizeof(info->max_f_number));
+			strlcpy(info->max_f_number,
+				camera_data[id].module->max_f_number,
+				sizeof(info->max_f_number));
+			info->has_focus_actuator =
+				camera_data[id].module->has_focus_actuator;
 			info->has_3a =
 				camera_data[id].module->has_3a;
 			info->pll_num =
@@ -1139,10 +1244,10 @@ static int sony_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 		goto exit;
 	}
 
-	if (data->i2c_conf &&
-		data->i2c_conf->use_i2c_mux)
+	if (data->power_info.i2c_conf &&
+		data->power_info.i2c_conf->use_i2c_mux)
 		sony_util_i2c_mux_enable(
-			data->i2c_conf);
+			data->power_info.i2c_conf);
 
 	if (s_ctrl->func_tbl->sensor_match_id)
 		rc = s_ctrl->func_tbl->sensor_match_id(s_ctrl);
@@ -1161,10 +1266,10 @@ static int sony_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 	if (rc < 0)
 		LOGE("power_down fail\n");
 
-	if (data->i2c_conf &&
-		data->i2c_conf->use_i2c_mux)
+	if (data->power_info.i2c_conf &&
+		data->power_info.i2c_conf->use_i2c_mux)
 		sony_util_i2c_mux_disable(
-			data->i2c_conf);
+			data->power_info.i2c_conf);
 
 	rc = sony_util_cci_deinit(s_ctrl->sensor_i2c_client);
 	if (rc < 0)
@@ -1246,7 +1351,7 @@ static int sony_camera_platform_probe(struct platform_device *pdev)
 	const struct of_device_id *match;
 	uint16_t id = 0;
 	struct msm_sensor_ctrl_t *s_ctrl = NULL;
-	struct msm_sensor_init_params *sensor_init_params;
+	struct msm_sensor_info_t *sensor_init_params;
 
 	match = of_match_device(sony_camera_0_dt_match, &pdev->dev);
 	if (!match && 1 < sensor_num) {
@@ -1278,7 +1383,7 @@ static int sony_camera_platform_probe(struct platform_device *pdev)
 		goto fail;
 	}
 
-	sensor_init_params = s_ctrl->sensordata->sensor_init_params;
+	sensor_init_params = s_ctrl->sensordata->sensor_info;
 	camera_data[id].probe_done = true;
 	LOGI("camera %d probe ok\n", id);
 
@@ -1287,7 +1392,7 @@ fail:
 	return rc;
 }
 
-static int __init msm_sensor_init_module(void)
+static int __init sony_sensor_init_module(void)
 {
 	int rc = 0;
 	uint16_t i;
@@ -1309,7 +1414,6 @@ static int __init msm_sensor_init_module(void)
 		if (rc < 0) {
 			LOGE("%s platform_driver_probe (%u) %d\n",
 				__func__, i, __LINE__);
-			break;
 		} else {
 			rc = sony_camera_info_init(i);
 			if (rc < 0) {
@@ -1337,7 +1441,7 @@ fail_alloc:
 	return rc;
 }
 
-static void __exit msm_sensor_exit_module(void)
+static void __exit sony_sensor_exit_module(void)
 {
 	uint16_t i;
 
@@ -1369,7 +1473,6 @@ static struct sony_camera_data camera_data[] = {
 			.sensor_v4l2_subdev_info_size	=
 					ARRAY_SIZE(sony_sensor_subdev_info),
 			.func_tbl			= &sony_sensor_func_tbl,
-			.clk_info                       = NULL,
 		},
 	},
 	{
@@ -1382,13 +1485,12 @@ static struct sony_camera_data camera_data[] = {
 			.sensor_v4l2_subdev_info_size	=
 					ARRAY_SIZE(sony_sensor_subdev_info),
 			.func_tbl			= &sony_sensor_func_tbl,
-			.clk_info                       = NULL,
 		},
 	},
 };
 
-module_init(msm_sensor_init_module);
-module_exit(msm_sensor_exit_module);
+module_init(sony_sensor_init_module);
+module_exit(sony_sensor_exit_module);
 
 MODULE_DESCRIPTION("SONY V4L2 camera sensor driver");
 MODULE_LICENSE("GPL v2");

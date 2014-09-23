@@ -1020,6 +1020,10 @@ EXPORT_SYMBOL(mmc_start_req);
  */
 void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
 {
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+	if (mmc_bus_needs_resume(host))
+		mmc_resume_bus(host);
+#endif
 	__mmc_start_req(host, mrq);
 	mmc_wait_for_req_done(host, mrq);
 }
@@ -2102,7 +2106,6 @@ int mmc_resume_bus(struct mmc_host *host)
 	wake_up(&host->defer_wq);
 #endif
 	spin_unlock_irqrestore(&host->lock, flags);
-
 	mmc_bus_put(host);
 	mmc_detect_change(host, 0);
 	printk("%s: Deferred resume completed\n", mmc_hostname(host));
@@ -3669,6 +3672,9 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		notify_block, struct mmc_host, pm_notify);
 	unsigned long flags;
 	int err = 0;
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+	bool pending_detect = false;
+#endif
 
 	switch (mode) {
 	case PM_HIBERNATION_PREPARE:
@@ -3704,7 +3710,19 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		 * just before rescan_disable is set to true.
 		 * Cancel such the scheduled works.
 		 */
-		cancel_delayed_work_sync(&host->detect);
+		if (cancel_delayed_work_sync(&host->detect)) {
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+			/*
+			 * In case of a deferred resume, we might end up not
+			 * running mmc_detect_change on resume so we cannot
+			 * safely ignore scheduled card redetection
+			 */
+			pending_detect = true;
+#endif
+		}
+#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
+		mmc_cd_prepare_suspend(host, pending_detect);
+#endif
 
 		if (!host->bus_ops || host->bus_ops->suspend)
 			break;
@@ -3728,8 +3746,8 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		host->rescan_disable = 0;
 		spin_unlock_irqrestore(&host->lock, flags);
 #ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
-		if (!mmc_cd_slot_status_changed(host))
-			break;
+		if (!mmc_cd_is_pending_detect(host))
+			break; /* IRQ should be triggered if CD changed */
 #endif
 		mmc_detect_change(host, 0);
 		break;

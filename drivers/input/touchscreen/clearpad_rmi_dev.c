@@ -47,8 +47,8 @@ struct rmidev_data {
 	/* read, write, etc. */
 
 	struct platform_device *pdev;
-	struct clearpad_platform_data *pdata;
-	struct clearpad_bus_data *bdata;
+	struct clearpad_platform_data_t *pdata;
+	struct clearpad_bus_data_t *bdata;
 	/* reference count */
 	int ref_count;
 
@@ -421,7 +421,7 @@ exit:
 static int __devinit rmi_dev_probe(struct platform_device *pdev)
 {
 
-	struct clearpad_data *cdata = pdev->dev.platform_data;
+	struct clearpad_data_t *cdata = pdev->dev.platform_data;
 	struct rmidev_data *data;
 	int retval = 0;
 

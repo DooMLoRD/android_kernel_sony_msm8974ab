@@ -12,6 +12,7 @@
  * published by the Free Software Foundation.
  */
 
+#include <linux/async.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of_gpio.h>
@@ -21,51 +22,18 @@
 #include <linux/clearpad.h>
 
 #define CLEARPAD_PAGE_SELECT_REGISTER 0xff
+#define CLEARPAD_REG(addr) ((addr) & 0xff)
 #define CLEARPAD_PAGE(addr) (((addr) >> 8) & 0xff)
 
-struct clearpad_i2c {
+struct clearpad_i2c_t {
 	struct platform_device *pdev;
 	unsigned int page;
 	struct mutex page_mutex;
 };
 
-static int clearpad_i2c_read(struct device *dev, u8 reg, u8 *buf, u8 len)
+static int clearpad_i2c_set_page(struct device *dev, u8 page)
 {
-	s32 rc = 0;
-	int rsize = I2C_SMBUS_BLOCK_MAX;
-	int off;
-
-	for (off = 0; off < len; off += rsize) {
-		if (len < off + I2C_SMBUS_BLOCK_MAX)
-			rsize = len - off;
-		rc = i2c_smbus_read_i2c_block_data(to_i2c_client(dev),
-				reg + off, rsize, &buf[off]);
-		if (rc != rsize) {
-			dev_err(dev, "%s: rc = %d\n", __func__, rc);
-			goto err_return;
-		}
-	}
-	rc = 0;
-err_return:
-	return rc;
-}
-
-static int clearpad_i2c_write(struct device *dev, u8 reg, const u8 *buf, u8 len)
-{
-	int rc = 0;
-	u8 i;
-	for (i = 0; i < len; i++) {
-		rc = i2c_smbus_write_byte_data(to_i2c_client(dev),
-				reg + i, buf[i]);
-		if (rc)
-			break;
-	}
-	return rc;
-}
-
-static int clearpad_i2c_set_page(struct device *dev, unsigned int page)
-{
-	struct clearpad_i2c *this = dev_get_drvdata(dev);
+	struct clearpad_i2c_t *this = dev_get_drvdata(dev);
 	char txbuf[2] = {CLEARPAD_PAGE_SELECT_REGISTER, page};
 	int rc = 0;
 
@@ -82,10 +50,75 @@ exit:
 	return rc;
 }
 
+static int clearpad_i2c_read(struct device *dev, u16 addr, u8 *buf, u8 len)
+{
+	struct clearpad_i2c_t *this = dev_get_drvdata(dev);
+	s32 rc = 0;
+	u8 page = CLEARPAD_PAGE(addr);
+	u8 reg = CLEARPAD_REG(addr);
+	int rsize = I2C_SMBUS_BLOCK_MAX;
+	int off;
+
+	mutex_lock(&this->page_mutex);
+
+	if (page != this->page) {
+		rc = clearpad_i2c_set_page(dev, page);
+		if (rc < 0)
+			goto exit;
+	}
+
+	for (off = 0; off < len; off += rsize) {
+		if (len < off + I2C_SMBUS_BLOCK_MAX)
+			rsize = len - off;
+		rc = i2c_smbus_read_i2c_block_data(to_i2c_client(dev),
+				reg + off, rsize, &buf[off]);
+		if (rc != rsize) {
+			dev_err(dev, "%s: rc = %d\n", __func__, rc);
+			if (rc > 0) {
+				off += rc;
+				break;
+			}
+			goto exit;
+		}
+	}
+	rc = off;
+exit:
+	mutex_unlock(&this->page_mutex);
+	return rc;
+}
+
+static int clearpad_i2c_write(struct device *dev, u16 addr,
+			      const u8 *buf, u8 len)
+{
+	struct clearpad_i2c_t *this = dev_get_drvdata(dev);
+	int rc = 0;
+	u8 reg = CLEARPAD_REG(addr);
+	u8 i;
+
+	mutex_lock(&this->page_mutex);
+
+	if (CLEARPAD_PAGE(addr) != this->page) {
+		rc = clearpad_i2c_set_page(dev, CLEARPAD_PAGE(addr));
+		if (rc < 0)
+			goto exit;
+	}
+
+	for (i = 0; i < len; i++) {
+		rc = i2c_smbus_write_byte_data(to_i2c_client(dev),
+				reg + i, buf[i]);
+		if (rc)
+			goto exit;
+	}
+	rc = i;
+exit:
+	mutex_unlock(&this->page_mutex);
+	return rc;
+}
+
 static int clearpad_i2c_read_block(struct device *dev, u16 addr, u8 *buf,
 		int len)
 {
-	struct clearpad_i2c *this = dev_get_drvdata(dev);
+	struct clearpad_i2c_t *this = dev_get_drvdata(dev);
 	u8 txbuf[1] = {addr & 0xff};
 	int rc = 0;
 
@@ -114,7 +147,7 @@ exit:
 static int clearpad_i2c_write_block(struct device *dev, u16 addr, const u8 *buf,
 		int len)
 {
-	struct clearpad_i2c *this = dev_get_drvdata(dev);
+	struct clearpad_i2c_t *this = dev_get_drvdata(dev);
 	u8 txbuf[len + 1];
 	int rc = 0;
 
@@ -132,13 +165,16 @@ static int clearpad_i2c_write_block(struct device *dev, u16 addr, const u8 *buf,
 	rc = i2c_master_send(to_i2c_client(dev), txbuf, sizeof(txbuf));
 	if (rc < 0)
 		dev_err(dev, "%s: rc = %d\n", __func__, rc);
+	else
+		rc -= 1;
 exit:
 	mutex_unlock(&this->page_mutex);
 	return rc;
 }
 
-static struct clearpad_bus_data clearpad_i2c_bus_data = {
+static struct clearpad_bus_data_t clearpad_i2c_bus_data = {
 	.bustype	= BUS_I2C,
+	.set_page	= clearpad_i2c_set_page,
 	.read		= clearpad_i2c_read,
 	.write		= clearpad_i2c_write,
 	.read_block	= clearpad_i2c_read_block,
@@ -147,7 +183,7 @@ static struct clearpad_bus_data clearpad_i2c_bus_data = {
 
 #ifdef CONFIG_OF
 static int clearpad_parse_dt(struct device *dev,
-		struct clearpad_platform_data *pdata)
+		struct clearpad_platform_data_t *pdata)
 {
 	struct device_node *np = dev->of_node;
 
@@ -166,7 +202,7 @@ static int clearpad_parse_dt(struct device *dev,
 static int __devinit clearpad_i2c_probe(struct i2c_client *client,
 				      const struct i2c_device_id *id)
 {
-	struct clearpad_data clearpad_data = {
+	struct clearpad_data_t clearpad_data = {
 		.pdata = NULL,
 		.bdata = &clearpad_i2c_bus_data,
 		.probe_retry = 0,
@@ -174,12 +210,12 @@ static int __devinit clearpad_i2c_probe(struct i2c_client *client,
 		.rmi_dev = NULL,
 #endif
 	};
-	struct clearpad_i2c *this;
+	struct clearpad_i2c_t *this;
 	int rc;
 
 	if (client->dev.of_node) {
 		clearpad_data.pdata = devm_kzalloc(&client->dev,
-				sizeof(struct clearpad_platform_data),
+				sizeof(struct clearpad_platform_data_t),
 				GFP_KERNEL);
 		if (!clearpad_data.pdata) {
 			dev_err(&client->dev, "failed to allocate memory\n");
@@ -195,7 +231,7 @@ static int __devinit clearpad_i2c_probe(struct i2c_client *client,
 		clearpad_data.pdata = client->dev.platform_data;
 	}
 
-	this = kzalloc(sizeof(struct clearpad_i2c), GFP_KERNEL);
+	this = kzalloc(sizeof(struct clearpad_i2c_t), GFP_KERNEL);
 	if (!this) {
 		rc = -ENOMEM;
 		goto exit;
@@ -236,7 +272,7 @@ exit:
 
 static int __devexit clearpad_i2c_remove(struct i2c_client *client)
 {
-	struct clearpad_i2c *this = dev_get_drvdata(&client->dev);
+	struct clearpad_i2c_t *this = dev_get_drvdata(&client->dev);
 	platform_device_unregister(this->pdev);
 	dev_set_drvdata(&client->dev, NULL);
 	kfree(this);
@@ -269,9 +305,25 @@ static struct i2c_driver clearpad_i2c_driver = {
 	.remove		= __devexit_p(clearpad_i2c_remove),
 };
 
+#ifndef MODULE
+void __devinit clearpad_i2c_init_async(void *unused, async_cookie_t cookie)
+{
+	int rc;
+
+	rc = i2c_add_driver(&clearpad_i2c_driver);
+	if (rc != 0)
+		pr_err("Clearpad I2C registration failed rc = %d\n", rc);
+}
+#endif
+
 static int __init clearpad_i2c_init(void)
 {
+#ifdef MODULE
 	return i2c_add_driver(&clearpad_i2c_driver);
+#else
+	async_schedule(clearpad_i2c_init_async, NULL);
+	return 0;
+#endif
 }
 
 static void __exit clearpad_i2c_exit(void)

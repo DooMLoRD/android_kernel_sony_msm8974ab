@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,10 +22,6 @@
 / {
 	model = "Qualcomm MSM 8926";
 	compatible = "qcom,msm8926";
-	qcom,msm-id = <200 0>,
-		      <224 0>,
-		      <200 0x10001>,
-		      <224 0x10001>;
 };
 
 &soc {
@@ -55,11 +51,6 @@
 			< 998400000 5>,
 			<1094400000 6>,
 			<1190400000 7>;
-		qcom,speed6-bin-v1 =
-			<         0 0>,
-			< 384000000 2>,
-			< 787200000 4>,
-			<1190400000 7>;
 		qcom,speed2-bin-v1 =
 			<         0 0>,
 			< 384000000 2>,
@@ -69,21 +60,6 @@
 			<1190400000 7>,
 			<1305600000 8>,
 			<1344000000 9>,
-			<1401600000 10>;
-		qcom,speed5-bin-v1 =
-			<         0 0>,
-			< 384000000 2>,
-			< 787200000 4>,
-			<1401600000 10>;
-		qcom,speed4-bin-v1 =
-			<         0 0>,
-			< 384000000 2>,
-			< 787200000 4>,
-			<1401600000 10>;
-		qcom,speed7-bin-v1 =
-			<         0 0>,
-			< 384000000 2>,
-			< 787200000 4>,
 			<1401600000 10>;
 		qcom,speed1-bin-v1 =
 			<         0 0>,
@@ -97,6 +73,20 @@
 			<1401600000 10>,
 			<1497600000 11>,
 			<1593600000 12>;
+		qcom,speed5-bin-v1 =
+			<         0 0>,
+			< 384000000 2>,
+			< 787200000 4>,
+			< 998400000 5>,
+			<1094400000 6>,
+			<1190400000 7>,
+			<1305600000 8>,
+			<1344000000 9>,
+			<1401600000 10>,
+			<1497600000 11>,
+			<1593600000 12>,
+			<1689600000 13>,
+			<1785600000 14>;
 	};
 
 	qcom,msm-thermal {
@@ -201,3 +191,9 @@
 	hsic,strobe-gpio = <&msmgpio 119 0x00>;
 	hsic,data-gpio = <&msmgpio 120 0x00>;
 };
+
+&usb_otg {
+	/delete-property/ qcom,hsusb-otg-disable-reset;
+	qcom,ahb-async-bridge-bypass;
+};
+

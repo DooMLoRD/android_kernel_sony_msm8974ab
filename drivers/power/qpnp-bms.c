@@ -1,5 +1,5 @@
 /* Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -139,6 +139,13 @@ struct bms_wakeup_source {
 	unsigned long		disabled;
 };
 
+struct batt_vendor_t {
+	const char *name;
+	int adc_min;
+	int adc_max;
+	int select;
+};
+
 struct qpnp_somc_params {
 	int		last_good_ocv_uv;
 	int		pc_unusable_original;
@@ -151,6 +158,9 @@ struct qpnp_somc_params {
 	int		aging_fcc_threshold;
 	int		aging_max_voltage_uv;
 	bool		batt_aging;
+	int			batt_vendor_num;
+	struct batt_vendor_t		batt_vendor[BATT_VENDOR_NUM];
+	unsigned long	tm_s_vbat;
 };
 
 struct qpnp_bms_chip {
@@ -296,6 +306,7 @@ struct qpnp_bms_chip {
 	u8				charge_increase;
 	int				fcc_resolution;
 	bool				battery_removed;
+	bool				in_taper_charge;
 	struct bms_irq			sw_cc_thr_irq;
 	struct bms_irq			ocv_thr_irq;
 	struct qpnp_vadc_chip		*vadc_dev;
@@ -770,19 +781,48 @@ static void reset_cc(struct qpnp_bms_chip *chip, u8 flags)
 static int get_battery_status(struct qpnp_bms_chip *chip)
 {
 	union power_supply_propval ret = {0,};
+	int rc;
 
 	if (chip->batt_psy == NULL)
 		chip->batt_psy = power_supply_get_by_name("battery");
 	if (chip->batt_psy) {
 		/* if battery has been registered, use the status property */
-		chip->batt_psy->get_property(chip->batt_psy,
+		rc = chip->batt_psy->get_property(chip->batt_psy,
 					POWER_SUPPLY_PROP_STATUS, &ret);
+		if (rc) {
+			pr_debug("Battery does not export status: %d\n", rc);
+			return POWER_SUPPLY_STATUS_UNKNOWN;
+		}
 		return ret.intval;
 	}
 
 	/* Default to false if the battery power supply is not registered. */
 	pr_debug("battery power supply is not registered\n");
 	return POWER_SUPPLY_STATUS_UNKNOWN;
+}
+
+static int get_battery_charge_type(struct qpnp_bms_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+	int rc;
+
+	if (chip->batt_psy == NULL)
+		chip->batt_psy = power_supply_get_by_name("battery");
+	if (chip->batt_psy) {
+		/* if battery has been registered, use the type property */
+		rc = chip->batt_psy->get_property(chip->batt_psy,
+				POWER_SUPPLY_PROP_CHARGE_TYPE, &ret);
+		if (rc) {
+			pr_debug("Battery does not export charge type: %d\n"
+									, rc);
+			return POWER_SUPPLY_CHARGE_TYPE_NONE;
+		}
+		return ret.intval;
+	}
+
+	/* Default to false if the battery power supply is not registered. */
+	pr_debug("battery power supply is not registered\n");
+	return POWER_SUPPLY_CHARGE_TYPE_NONE;
 }
 
 static bool is_battery_charging(struct qpnp_bms_chip *chip)
@@ -815,8 +855,12 @@ static bool is_battery_present(struct qpnp_bms_chip *chip)
 		chip->batt_psy = power_supply_get_by_name("battery");
 	if (chip->batt_psy) {
 		/* if battery has been registered, use the present property */
-		chip->batt_psy->get_property(chip->batt_psy,
+		rc = chip->batt_psy->get_property(chip->batt_psy,
 					POWER_SUPPLY_PROP_PRESENT, &ret);
+		if (rc) {
+			pr_debug("battery does not export present: %d\n", rc);
+			return true;
+		}
 		return ret.intval;
 	}
 
@@ -857,13 +901,18 @@ static int get_battery_insertion_ocv_uv(struct qpnp_bms_chip *chip)
 static bool is_batfet_closed(struct qpnp_bms_chip *chip)
 {
 	union power_supply_propval ret = {0,};
+	int rc;
 
 	if (chip->batt_psy == NULL)
 		chip->batt_psy = power_supply_get_by_name("battery");
 	if (chip->batt_psy) {
 		/* if battery has been registered, use the online property */
-		chip->batt_psy->get_property(chip->batt_psy,
+		rc = chip->batt_psy->get_property(chip->batt_psy,
 					POWER_SUPPLY_PROP_ONLINE, &ret);
+		if (rc) {
+			pr_debug("Battery does not export online: %d\n", rc);
+			return true;
+		}
 		return !!ret.intval;
 	}
 
@@ -1859,7 +1908,7 @@ static int report_cc_based_soc(struct qpnp_bms_chip *chip)
 	last_change_sec = chip->last_soc_change_sec;
 	calculate_delta_time(&last_change_sec, &time_since_last_change_sec);
 
-	charging = is_battery_charging(chip);
+	charging = chip->battery_status == POWER_SUPPLY_STATUS_CHARGING;
 	charging_since_last_report = charging || (chip->last_soc_unbound
 			&& chip->was_charging_at_sleep);
 	/*
@@ -1968,7 +2017,8 @@ static int charging_adjustments(struct qpnp_bms_chip *chip,
 	batt_terminal_uv = vbat_uv + (ibat_ua * chip->r_conn_mohm) / 1000;
 
 	if (chip->soc_at_cv == -EINVAL) {
-		if (batt_terminal_uv >= chip->max_voltage_uv - VDD_MAX_ERR) {
+		if (batt_terminal_uv >= chip->max_voltage_uv - VDD_MAX_ERR ||
+							chip->in_taper_charge) {
 			chip->soc_at_cv = soc;
 			chip->prev_chg_soc = soc;
 			chip->ibat_at_cv_ua = params->iavg_ua;
@@ -2665,18 +2715,28 @@ static int recalculate_raw_soc(struct qpnp_bms_chip *chip)
 	return soc;
 }
 
+#define MIN_INTERVAL_VBAT_MON 5
 static int recalculate_soc(struct qpnp_bms_chip *chip)
 {
 	int batt_temp, rc, soc;
 	struct qpnp_vadc_result result;
 	struct raw_soc_params raw;
+	int delta_s;
+	unsigned long tmp_tm_s;
 
 	bms_stay_awake(&chip->soc_wake_source);
 	mutex_lock(&chip->vbat_monitor_mutex);
 	if (chip->vbat_monitor_params.state_request !=
-			ADC_TM_HIGH_LOW_THR_DISABLE)
-		qpnp_adc_tm_channel_measure(chip->adc_tm_dev,
+			ADC_TM_HIGH_LOW_THR_DISABLE) {
+		tmp_tm_s = chip->somc_params.tm_s_vbat;
+		calculate_delta_time(&chip->somc_params.tm_s_vbat, &delta_s);
+		pr_debug("vbat monitor delta_s: %d\n", delta_s);
+		if (delta_s >= MIN_INTERVAL_VBAT_MON)
+			qpnp_adc_tm_channel_measure(chip->adc_tm_dev,
 					&chip->vbat_monitor_params);
+		else
+			chip->somc_params.tm_s_vbat = tmp_tm_s;
+	}
 	mutex_unlock(&chip->vbat_monitor_mutex);
 	if (chip->use_voltage_soc) {
 		soc = calculate_soc_from_voltage(chip);
@@ -3351,6 +3411,7 @@ static void charging_ended(struct qpnp_bms_chip *chip)
 	mutex_lock(&chip->last_ocv_uv_mutex);
 	chip->soc_at_cv = -EINVAL;
 	chip->prev_chg_soc = -EINVAL;
+	chip->in_taper_charge = false;
 
 	/* update the chargecycles */
 	if (chip->end_soc > chip->start_soc) {
@@ -3482,6 +3543,11 @@ static void qpnp_bms_external_power_changed(struct power_supply *psy)
 	battery_insertion_check(chip);
 	batfet_status_check(chip);
 	battery_status_check(chip);
+
+	if (POWER_SUPPLY_CHARGE_TYPE_TAPER == get_battery_charge_type(chip))
+		chip->in_taper_charge = true;
+	else
+		chip->in_taper_charge = false;
 }
 
 static int qpnp_bms_power_get_property(struct power_supply *psy,
@@ -3722,6 +3788,44 @@ static int64_t read_battery_id(struct qpnp_bms_chip *chip)
 	return result.physical;
 }
 
+static int select_battery_vendor(struct qpnp_bms_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+	int err = 0, i = 0;
+	int64_t battery_id = read_battery_id(chip);
+	if (battery_id < 0) {
+		pr_err("cannot read battery_id err = %lld\n",
+						battery_id);
+		return battery_id;
+	}
+	for (i = 0; i < chip->somc_params.batt_vendor_num; i++) {
+		if (chip->somc_params.batt_vendor[i].select &&
+			battery_id >=
+				chip->somc_params.batt_vendor[i].adc_min &&
+			battery_id <= chip->somc_params.batt_vendor[i].adc_max)
+			break;
+	}
+	if (i >= chip->somc_params.batt_vendor_num) {
+		pr_info("battery vendor not found\n");
+		i = BATT_VENDOR_SEND;
+	} else {
+		ret.intval = i + 1;
+	}
+	if (chip->batt_psy == NULL)
+		chip->batt_psy = power_supply_get_by_name("battery");
+	if (chip->batt_psy) {
+		err = chip->batt_psy->set_property(chip->batt_psy,
+				POWER_SUPPLY_PROP_BATT_ID, &ret);
+		if (err)
+			pr_err("set_property BATT_ID error\n");
+	}
+	pr_info("battery_id = %lld vendor = %s min = %d max = %d\n",
+		battery_id, chip->somc_params.batt_vendor[i].name,
+		chip->somc_params.batt_vendor[i].adc_min,
+		chip->somc_params.batt_vendor[i].adc_max);
+	return i;
+}
+
 static int set_battery_data(struct qpnp_bms_chip *chip)
 {
 	int64_t battery_id;
@@ -3734,7 +3838,21 @@ static int set_battery_data(struct qpnp_bms_chip *chip)
 	} else if (chip->batt_type == BATT_PALLADIUM) {
 		batt_data = &palladium_1500_data;
 	} else if (chip->batt_type == BATT_OEM) {
-		batt_data = &oem_batt_data;
+		if (!chip->somc_params.batt_vendor_num) {
+			pr_err("Could not setting vendor id data\n");
+			batt_data = &oem_batt_data;
+		} else {
+			rc = select_battery_vendor(chip);
+			if (rc < 0)
+				return rc;
+			batt_data = &oem_batt_data_somc[rc];
+			chip->r_sense_uohm =
+				oem_batt_data_somc[rc].r_sense_uohm;
+			chip->ocv_high_threshold_uv =
+				oem_batt_data_somc[rc].ocv_high_threshold_uv;
+			chip->ocv_low_threshold_uv =
+				oem_batt_data_somc[rc].ocv_low_threshold_uv;
+		}
 	} else if (chip->batt_type == BATT_QRD_4V35_2000MAH) {
 		batt_data = &QRD_4v35_2000mAh_data;
 	} else if (chip->batt_type == BATT_QRD_4V2_1300MAH) {
@@ -3892,9 +4010,11 @@ do {									\
 				"qcom," qpnp_spmi_property);		\
 } while (0)
 
+#define MV_TO_UV			1000
 static inline int bms_read_properties(struct qpnp_bms_chip *chip)
 {
-	int rc = 0;
+	int rc = 0, i = 0, count = 0;
+	uint32_t *temp = NULL;
 
 	SPMI_PROP_READ(r_sense_uohm, "r-sense-uohm", rc);
 	SPMI_PROP_READ(v_cutoff_uv, "v-cutoff-uv", rc);
@@ -3978,6 +4098,58 @@ static inline int bms_read_properties(struct qpnp_bms_chip *chip)
 		return rc;
 	}
 
+	count = of_property_count_strings(chip->spmi->dev.of_node,
+			"qcom,battery-vendor-name");
+	if (count > 0) {
+		for (i = 0; i < count; i++) {
+			rc = of_property_read_string_index(
+				chip->spmi->dev.of_node,
+				"qcom,battery-vendor-name", i,
+				&chip->somc_params.batt_vendor[i].name);
+			if (rc < 0) {
+				pr_err("%s failed %d\n", __func__, __LINE__);
+				goto out;
+			}
+		}
+		temp = kzalloc(sizeof(uint32_t) * count, GFP_KERNEL);
+		if (!temp) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			goto out;
+		}
+
+		rc = of_property_read_u32_array(chip->spmi->dev.of_node,
+			"qcom,battery-vendor-adc-min", temp, count);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			goto err;
+		}
+		for (i = 0; i < count; i++)
+			chip->somc_params.batt_vendor[i].adc_min =
+				temp[i] * MV_TO_UV;
+
+		rc = of_property_read_u32_array(chip->spmi->dev.of_node,
+			"qcom,battery-vendor-adc-max", temp, count);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			goto err;
+		}
+		for (i = 0; i < count; i++)
+			chip->somc_params.batt_vendor[i].adc_max =
+				temp[i] * MV_TO_UV;
+
+		rc = of_property_read_u32_array(chip->spmi->dev.of_node,
+			"qcom,battery-vendor-select", temp, count);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			goto err;
+		}
+		for (i = 0; i < count; i++)
+			chip->somc_params.batt_vendor[i].select = temp[i] ;
+
+		chip->somc_params.batt_vendor_num = count;
+		kzfree(temp);
+	}
+
 	pr_debug("dts data: r_sense_uohm:%d, v_cutoff_uv:%d, max_v:%d\n",
 			chip->r_sense_uohm, chip->v_cutoff_uv,
 			chip->max_voltage_uv);
@@ -3991,6 +4163,11 @@ static inline int bms_read_properties(struct qpnp_bms_chip *chip)
 			chip->ignore_shutdown_soc, chip->use_voltage_soc);
 	pr_debug("use external rsense: %d\n", chip->use_external_rsense);
 	return 0;
+
+err:
+	kzfree(temp);
+out:
+	return -ENOMEM;
 }
 
 static inline void bms_initialize_constants(struct qpnp_bms_chip *chip)
@@ -4330,6 +4507,7 @@ enum {
 	OUTPUT_BATT_LOG,
 	FCC_NEW_MAH,
 	FCC_SAMPLES,
+	BATT_ID_UV,
 };
 
 static ssize_t qpnp_bms_param_show(struct device *dev,
@@ -4368,6 +4546,7 @@ static struct device_attribute qpnp_bms_attrs[] = {
 						qpnp_bms_param_store),
 	__ATTR(fcc_new_mah, S_IRUGO, qpnp_bms_param_show, NULL),
 	__ATTR(fcc_samples, S_IRUGO, qpnp_bms_param_show, NULL),
+	__ATTR(batt_id_uv, S_IRUGO, qpnp_bms_param_show, NULL),
 };
 
 static ssize_t qpnp_bms_param_show(struct device *dev,
@@ -4472,6 +4651,10 @@ static ssize_t qpnp_bms_param_show(struct device *dev,
 			size += scnprintf(buf + size,
 					PAGE_SIZE - size, "%d/",
 					chip->fcc_learning_samples[i].fcc_new);
+		break;
+	case BATT_ID_UV:
+		cc = read_battery_id(chip);
+		size = scnprintf(buf, PAGE_SIZE, "%lld\n", cc);
 		break;
 	default:
 		size = 0;
@@ -4613,6 +4796,12 @@ static int __devinit qpnp_bms_probe(struct spmi_device *spmi)
 		goto error_read;
 	}
 
+	rc = set_battery_data(chip);
+	if (rc) {
+		pr_err("Bad battery data %d\n", rc);
+		goto error_read;
+	}
+
 	rc = read_iadc_channel_select(chip);
 	if (rc) {
 		pr_err("Unable to get iadc selected channel = %d\n", rc);
@@ -4628,12 +4817,6 @@ static int __devinit qpnp_bms_probe(struct spmi_device *spmi)
 					rc);
 			goto error_read;
 		}
-	}
-
-	rc = set_battery_data(chip);
-	if (rc) {
-		pr_err("Bad battery data %d\n", rc);
-		goto error_read;
 	}
 
 	bms_initialize_constants(chip);
@@ -4683,12 +4866,6 @@ static int __devinit qpnp_bms_probe(struct spmi_device *spmi)
 		goto error_setup;
 	}
 
-	rc = bms_request_irqs(chip);
-	if (rc) {
-		pr_err("error requesting bms irqs, rc = %d\n", rc);
-		goto error_setup;
-	}
-
 	battery_insertion_check(chip);
 	batfet_status_check(chip);
 	battery_status_check(chip);
@@ -4719,6 +4896,12 @@ static int __devinit qpnp_bms_probe(struct spmi_device *spmi)
 	if (rc) {
 		pr_err("error reading vbat_sns adc channel = %d, rc = %d\n",
 						VBAT_SNS, rc);
+		goto unregister_dc;
+	}
+
+	rc = bms_request_irqs(chip);
+	if (rc) {
+		pr_err("error requesting bms irqs, rc = %d\n", rc);
 		goto unregister_dc;
 	}
 

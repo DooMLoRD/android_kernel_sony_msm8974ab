@@ -1,4 +1,4 @@
-/* Copyright (C) 2013 Sony Mobile Communications AB.
+/* Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -857,7 +857,11 @@ static int stereo_speaker_on(
 }
 
 /* warm startup */
-static int stereo_speaker_warm_on(void)
+static int stereo_speaker_warm_on(
+	bool param_change,
+	struct tfa98xx_param_data *config[2],
+	struct tfa98xx_param_data *preset[2],
+	struct tfa98xx_param_data *eq[2])
 {
 	enum Tfa98xx_Error err = Tfa98xx_Error_Ok;
 	unsigned char h;
@@ -896,6 +900,27 @@ static int stereo_speaker_warm_on(void)
 			}
 		}
 	}
+
+	if (param_change) {
+		/* load the settings */
+		for (h = 0; h < 2; h++)
+			setConfig(1, &handles[h], config[h]);
+
+		/* load a preset */
+		for (h = 0; h < 2; h++)
+			setPreset(1, &handles[h], preset[h]);
+
+		/* set the equalizer */
+		for (h = 0; h < 2; h++)
+			setEQ(1, &handles[h], eq[h]);
+
+		err = set_speaker_lr(handles, speaker_lr);
+		if (err != Tfa98xx_Error_Ok) {
+			pr_err("%s: set_speaker_lr failed\n", __func__);
+			return err;
+		}
+	}
+
 	for (h = 0; h < 2; h++) {
 		err = Tfa98xx_SetMute(handles[h], Tfa98xx_Mute_Off);
 		if (err != Tfa98xx_Error_Ok)
@@ -1028,12 +1053,18 @@ static int mono_speaker_on(
 	return 0;
 }
 
-static int mono_speaker_warm_on(int channel)
+static int mono_speaker_warm_on(
+	int channel,
+	bool param_change,
+	struct tfa98xx_param_data *config,
+	struct tfa98xx_param_data *preset,
+	struct tfa98xx_param_data *eq)
 {
 	enum Tfa98xx_Error err = Tfa98xx_Error_Ok;
 	int ready;
 	int timeout;
 
+	pr_info("%s\n", __func__);
 	err = Tfa98xx_Powerdown(handles[channel], 0);
 	if (err != Tfa98xx_Error_Ok)
 		pr_err("%s: Tfa98xx_Powerdown failed\n", __func__);
@@ -1060,6 +1091,22 @@ static int mono_speaker_warm_on(int channel)
 		if (timeout > 50) {
 			pr_info("%s timeout ready:%d\n", __func__, ready);
 			break;
+		}
+	}
+
+	if (param_change) {
+		/* load the settings */
+		setConfig(1, &handles[channel], config);
+		/* load a preset */
+		setPreset(1, &handles[channel], preset);
+		/* set the equalizer */
+		setEQ(1, &handles[channel], eq);
+
+		err = Tfa98xx_SelectChannel(handles[channel],
+						Tfa98xx_Channel_L_R);
+		if (err != Tfa98xx_Error_Ok) {
+			pr_err("%s: Tfa98xx_SelectChannel failed\n", __func__);
+			return -EINVAL;
 		}
 	}
 
@@ -1160,7 +1207,7 @@ static int tfa98xx_enable(void)
 	enum Tfa98xx_Error err;
 	unsigned short status1 = 0;
 	unsigned short status2 = 0;
-	bool cold_start = false;
+	bool param_change = false;
 	struct tfa98xx_param_data *preset_ptr[2] = {NULL, NULL};
 	struct tfa98xx_param_data *config_ptr[2] = {NULL, NULL};
 	struct tfa98xx_param_data *speaker_ptr[2] = {NULL, NULL};
@@ -1184,7 +1231,7 @@ static int tfa98xx_enable(void)
 	if (speaker_type_now != speaker_type
 		|| speaker_channel_now != speaker_channel) {
 		tfa98xx_disable();
-		cold_start = true;
+		param_change = true;
 	}
 	speaker_ptr[TOP] = &speaker_data[AMP_TOP];
 	speaker_ptr[BOTTOM] = &speaker_data[AMP_BOTTOM];
@@ -1239,7 +1286,7 @@ static int tfa98xx_enable(void)
 			pr_err("%s: Tfa98xx_ReadRegister16 failed %d\n",
 				__func__, err);
 		}
-		if (cold_start || (status1 & TFA98XX_STATUSREG_ACS_MSK) != 0) {
+		if ((status1 & TFA98XX_STATUSREG_ACS_MSK) != 0) {
 			pr_info("cold start %04x\n", status1);
 			ret = mono_speaker_on(
 				TOP,
@@ -1248,8 +1295,14 @@ static int tfa98xx_enable(void)
 				preset_ptr[TOP],
 				eq_ptr[TOP]);
 		} else {
-			pr_info("warm start %04x\n", status1);
-			ret = mono_speaker_warm_on(TOP);
+			pr_info("warm start %04x param_change %d\n",
+				status1, param_change);
+			ret = mono_speaker_warm_on(
+				TOP,
+				param_change,
+				config_ptr[TOP],
+				preset_ptr[TOP],
+				eq_ptr[TOP]);
 		}
 
 	} else if (speaker_channel == SPEAKER_CHANNEL_BOTTOM) {
@@ -1264,7 +1317,7 @@ static int tfa98xx_enable(void)
 			pr_err("%s: Tfa98xx_ReadRegister16 failed %d\n",
 				__func__, err);
 		}
-		if (cold_start || (status1 & TFA98XX_STATUSREG_ACS_MSK) != 0) {
+		if ((status1 & TFA98XX_STATUSREG_ACS_MSK) != 0) {
 			pr_info("cold start %04x\n", status1);
 			ret = mono_speaker_on(
 				BOTTOM,
@@ -1273,8 +1326,14 @@ static int tfa98xx_enable(void)
 				preset_ptr[BOTTOM],
 				eq_ptr[BOTTOM]);
 		} else {
-			pr_info("warm start %04x\n", status1);
-			ret = mono_speaker_warm_on(BOTTOM);
+			pr_info("warm start %04x param_change %d\n",
+				status1, param_change);
+			ret = mono_speaker_warm_on(
+				BOTTOM,
+				param_change,
+				config_ptr[BOTTOM],
+				preset_ptr[BOTTOM],
+				eq_ptr[BOTTOM]);
 		}
 
 	} else if (speaker_channel == SPEAKER_CHANNEL_BOTH) {
@@ -1295,8 +1354,7 @@ static int tfa98xx_enable(void)
 			pr_err("%s: Tfa98xx_ReadRegister16 failed %d\n",
 				__func__, err);
 		}
-		if (cold_start
-			|| (status1 & TFA98XX_STATUSREG_ACS_MSK) != 0
+		if ((status1 & TFA98XX_STATUSREG_ACS_MSK) != 0
 			|| (status2 & TFA98XX_STATUSREG_ACS_MSK) != 0) {
 			pr_info("cold start %04x %04x\n", status1, status2);
 			ret = stereo_speaker_on(
@@ -1304,13 +1362,18 @@ static int tfa98xx_enable(void)
 				config_ptr,
 				preset_ptr,
 				eq_ptr);
-		} else if (speaker_lr != speaker_lr_now) {
-			pr_info("speaker LR change %d\n", speaker_lr);
-			ret = set_speaker_lr(handles, speaker_lr);
-			ret = stereo_speaker_warm_on();
 		} else {
-			pr_info("warm start %04x %04x\n", status1, status2);
-			ret = stereo_speaker_warm_on();
+			if ((speaker_lr != speaker_lr_now) && !param_change) {
+				pr_info("speaker LR change %d\n", speaker_lr);
+				ret = set_speaker_lr(handles, speaker_lr);
+			}
+			pr_info("warm start %04x %04x param_change %d\n",
+				status1, status2, param_change);
+			ret = stereo_speaker_warm_on(
+				param_change,
+				config_ptr,
+				preset_ptr,
+				eq_ptr);
 		}
 	}
 	speaker_type_now = speaker_type;

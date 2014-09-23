@@ -1,5 +1,5 @@
 /* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
- * Copyright (c) 2012 Sony Mobile Communications AB.
+ * Copyright (c) 2012 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -42,6 +42,7 @@
 #include <linux/qpnp/qpnp-adc.h>
 #include <linux/cdev.h>
 #include <linux/completion.h>
+#include <linux/wakelock.h>
 
 #include <mach/rpm-regulator.h>
 #include <mach/rpm-regulator-smd.h>
@@ -166,6 +167,22 @@ MODULE_PARM_DESC(prop_chg_detect, "Enable Proprietary charger detection");
 #define PWR_EVNT_IRQ_STAT_REG    (QSCRATCH_REG_OFFSET + 0x58)
 #define PWR_EVNT_IRQ_MASK_REG    (QSCRATCH_REG_OFFSET + 0x5C)
 
+#define USB_PHY_TXFSLSTUNE0		0x03C00000	/* 22:25 */
+#define USB_PHY_TXRESTUNE0		0x00300000	/* 20:21 */
+#define USB_PHY_TXHSXVTUNE0		0x000C0000	/* 18:19 */
+#define USB_PHY_TXRISETUNE0		0x00030000	/* 16:17 */
+#define USB_PHY_TXPREEMPAMPTUNE0	0x0000C000	/* 14:15 */
+#define USB_PHY_TXPREEMPPULSETUNE0	0x00002000	/* 13:13 */
+#define USB_PHY_TXVREFTUNE0		0x00001E00	/*  9:12 */
+#define USB_PHY_SQRXTUNE0		0x000001C0	/*  6: 8 */
+#define USB_PHY_OTGTUNE0		0x00000038	/*  3: 5 */
+#define USB_PHY_COMPDISTUNE0		0x00000007	/*  0: 2 */
+
+#define dwc3_msm_read_phy_param(base, mask)\
+			dwc3_msm_read_reg_field((base),\
+						PARAMETER_OVERRIDE_X_REG,\
+						(mask))
+
 struct dwc3_msm_req_complete {
 	struct list_head list_item;
 	struct usb_request *req;
@@ -241,7 +258,6 @@ struct dwc3_msm {
 	unsigned long		lpm_flags;
 #define MDWC3_PHY_REF_AND_CORECLK_OFF	BIT(0)
 #define MDWC3_TCXO_SHUTDOWN		BIT(1)
-#define MDWC3_ASYNC_IRQ_WAKE_CAPABILITY	BIT(2)
 
 	u32 qscratch_ctl_val;
 	dev_t ext_chg_dev;
@@ -260,6 +276,8 @@ struct dwc3_msm {
 #define USB_HVDCP_IN_REQ	0x03
 #define USB_HVDCP_5V_DONE	0x04
 #define USB_HVDCP_9V_DONE	0x08
+
+	struct wake_lock	id_wakelock;
 };
 
 #define USB_HVDCP_9V_CHG_MAX	1800
@@ -275,6 +293,8 @@ struct dwc3_msm {
 #define USB_SSPHY_1P8_VOL_MIN		1800000 /* uV */
 #define USB_SSPHY_1P8_VOL_MAX		1800000 /* uV */
 #define USB_SSPHY_1P8_HPM_LOAD		23000	/* uA */
+
+#define USB_ID_WAKE_LOCK_TIMEOUT	(3 * HZ)
 
 static struct usb_ext_notification *usb_ext;
 
@@ -1106,7 +1126,7 @@ void msm_dwc3_restart_usb_session(struct usb_gadget *gadget)
 	struct dwc3 *dwc = container_of(gadget, struct dwc3, gadget);
 	struct dwc3_msm *mdwc = dev_get_drvdata(dwc->dev->parent);
 
-	if (mdwc)
+	if (!mdwc)
 		return;
 
 	dev_dbg(mdwc->dev, "%s\n", __func__);
@@ -1496,10 +1516,34 @@ static void dwc3_msm_qscratch_reg_init(struct dwc3_msm *mdwc,
 	 */
 	if (override_phy_init)
 		mdwc->hsphy_init_seq = override_phy_init;
-	if (mdwc->hsphy_init_seq)
+	if (mdwc->hsphy_init_seq) {
+		dev_info(mdwc->dev, "set phy param value=0x%08x\n",
+					mdwc->hsphy_init_seq & 0x03FFFFFF);
 		dwc3_msm_write_readback(mdwc->base,
 					PARAMETER_OVERRIDE_X_REG, 0x03FFFFFF,
 					mdwc->hsphy_init_seq & 0x03FFFFFF);
+	}
+	dev_dbg(mdwc->dev, "TXFSLSTUNE0       \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXFSLSTUNE0));
+	dev_dbg(mdwc->dev, "TXRESTUNE0        \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXRESTUNE0));
+	dev_dbg(mdwc->dev, "TXHSXVTUNE0       \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXHSXVTUNE0));
+	dev_dbg(mdwc->dev, "TXRISETUNE0       \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXRISETUNE0));
+	dev_dbg(mdwc->dev, "TXPREEMPAMPTUNE0  \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXPREEMPAMPTUNE0));
+	dev_dbg(mdwc->dev, "TXPREEMPPULSETUNE0\t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base,
+						USB_PHY_TXPREEMPPULSETUNE0));
+	dev_dbg(mdwc->dev, "TXVREFTUNE0       \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_TXVREFTUNE0));
+	dev_dbg(mdwc->dev, "SQRXTUNE0         \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_SQRXTUNE0));
+	dev_dbg(mdwc->dev, "OTGTUNE0          \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_OTGTUNE0));
+	dev_dbg(mdwc->dev, "COMPDISTUNE0      \t0x%02x\n",
+		dwc3_msm_read_phy_param(mdwc->base, USB_PHY_COMPDISTUNE0));
 
 	/*
 	 * Enable master clock for RAMs to allow BAM to access RAMs when
@@ -1838,7 +1882,6 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	bool host_bus_suspend;
 	bool host_ss_active;
 	bool host_ss_suspend;
-	bool device_bus_suspend;
 
 	dev_dbg(mdwc->dev, "%s: entering lpm\n", __func__);
 
@@ -1866,8 +1909,6 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	      (mdwc->charger.chg_type == DWC3_FLOATED_CHARGER));
 	host_bus_suspend = mdwc->host_mode == 1;
 	host_ss_suspend = host_bus_suspend && host_ss_active;
-	device_bus_suspend = ((mdwc->charger.chg_type == DWC3_SDP_CHARGER) ||
-				 (mdwc->charger.chg_type == DWC3_CDP_CHARGER));
 
 	if (!dcp && !host_bus_suspend)
 		dwc3_msm_write_reg(mdwc->base, QSCRATCH_CTRL_REG,
@@ -1970,16 +2011,10 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	dev_info(mdwc->dev, "DWC3 in low power mode\n");
 
 	if (mdwc->hs_phy_irq) {
-		/*
-		 * with DCP or during cable disconnect, we dont require wakeup
-		 * using HS_PHY_IRQ. Hence enable wakeup only in case of host
-		 * bus suspend and device bus suspend.
-		 */
-		if (host_bus_suspend || device_bus_suspend) {
-			enable_irq_wake(mdwc->hs_phy_irq);
-			mdwc->lpm_flags |= MDWC3_ASYNC_IRQ_WAKE_CAPABILITY;
-		}
 		enable_irq(mdwc->hs_phy_irq);
+		/* with DCP we dont require wakeup using HS_PHY_IRQ */
+		if (dcp)
+			disable_irq_wake(mdwc->hs_phy_irq);
 	}
 
 	return 0;
@@ -2113,12 +2148,9 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 		enable_irq(mdwc->hs_phy_irq);
 		mdwc->lpm_irq_seen = false;
 	}
-	/* Disable wakeup capable for HS_PHY IRQ, if enabled */
-	if (mdwc->hs_phy_irq &&
-			(mdwc->lpm_flags & MDWC3_ASYNC_IRQ_WAKE_CAPABILITY)) {
-			disable_irq_wake(mdwc->hs_phy_irq);
-			mdwc->lpm_flags &= ~MDWC3_ASYNC_IRQ_WAKE_CAPABILITY;
-	}
+	/* it must DCP disconnect, re-enable HS_PHY wakeup IRQ */
+	if (mdwc->hs_phy_irq && dcp)
+		enable_irq_wake(mdwc->hs_phy_irq);
 
 	dev_info(mdwc->dev, "DWC3 exited from low power mode\n");
 
@@ -2424,9 +2456,12 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 				/* if HVDCP 5V or normal DCP, limit to 1500mA */
 				/* fall through */
 			case DWC3_CDP_CHARGER:
-			case DWC3_PROPRIETARY_CHARGER:
 				if (uA > 1000 * DWC3_IDEV_CHG_MAX)
 					uA = 1000 * DWC3_IDEV_CHG_MAX;
+				break;
+			case DWC3_PROPRIETARY_CHARGER:
+				if (uA > 1000 * DWC3_PROPRIETARY_CHG_MAX)
+					uA = 1000 * DWC3_PROPRIETARY_CHG_MAX;
 				break;
 			case DWC3_INVALID_CHARGER:
 			case DWC3_FLOATED_CHARGER:
@@ -2511,21 +2546,31 @@ static void dwc3_ext_notify_online(void *ctx, int on)
 {
 	struct dwc3_msm *mdwc = ctx;
 	bool notify_otg = false;
+	int ext_inused = 0;
 
 	if (!mdwc) {
 		pr_err("%s: DWC3 driver already removed\n", __func__);
 		return;
 	}
 
-	dev_dbg(mdwc->dev, "notify %s%s\n", on ? "" : "dis", "connected");
+	dev_info(mdwc->dev, "notify %s%s\n", on ? "" : "dis", "connected");
 
 	if (!mdwc->ext_vbus_psy)
 		mdwc->ext_vbus_psy = power_supply_get_by_name("ext-vbus");
+
+	ext_inused = mdwc->ext_inuse;
 
 	mdwc->ext_inuse = on;
 	if (on) {
 		/* force OTG to exit B-peripheral state */
 		mdwc->ext_xceiv.bsv = false;
+
+		/*
+		 * In race condition, ID value might not be updated
+		 * even through ID pin is switched to MHL
+		 */
+		mdwc->ext_xceiv.id = DWC3_ID_FLOAT;
+
 		notify_otg = true;
 		dwc3_start_chg_det(&mdwc->charger, false);
 	} else {
@@ -2545,6 +2590,14 @@ static void dwc3_ext_notify_online(void *ctx, int on)
 	if (mdwc->ext_vbus_psy)
 		power_supply_set_present(mdwc->ext_vbus_psy, on);
 
+	if (!mdwc->id_state && !on && ext_inused) {
+		dev_info(mdwc->dev, "%s: There may be unhandled ID GND\n",
+								__func__);
+		wake_lock_timeout(&mdwc->id_wakelock, USB_ID_WAKE_LOCK_TIMEOUT);
+		queue_work(system_nrt_wq, &mdwc->id_work);
+		return;
+	}
+
 	if (notify_otg)
 		queue_delayed_work(system_nrt_wq, &mdwc->resume_work, 0);
 }
@@ -2561,7 +2614,7 @@ static void dwc3_id_work(struct work_struct *w)
 
 		ret = usb_ext->notify(usb_ext->ctxt, mdwc->id_state,
 				      dwc3_ext_notify_online, mdwc);
-		dev_dbg(mdwc->dev, "%s: external handler returned %d\n",
+		dev_info(mdwc->dev, "%s: external handler returned %d\n",
 			__func__, ret);
 
 		if (mdwc->pmic_id_irq) {
@@ -2593,6 +2646,7 @@ static irqreturn_t dwc3_pmic_id_irq(int irq, void *data)
 	id = !!irq_read_line(irq);
 	if (mdwc->id_state != id) {
 		mdwc->id_state = id;
+		wake_lock_timeout(&mdwc->id_wakelock, USB_ID_WAKE_LOCK_TIMEOUT);
 		queue_work(system_nrt_wq, &mdwc->id_work);
 	}
 
@@ -2651,6 +2705,7 @@ static void dwc3_adc_notification(enum qpnp_tm_state state, void *ctx)
 		mdwc->adc_param.state_request = ADC_TM_HIGH_THR_ENABLE;
 	}
 
+	wake_lock_timeout(&mdwc->id_wakelock, USB_ID_WAKE_LOCK_TIMEOUT);
 	dwc3_id_work(&mdwc->id_work);
 
 	/* re-arm ADC interrupt */
@@ -2982,6 +3037,8 @@ static int __devinit dwc3_msm_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&mdwc->init_adc_work, dwc3_init_adc_work);
 	init_completion(&mdwc->ext_chg_wait);
 
+	wake_lock_init(&mdwc->id_wakelock, WAKE_LOCK_SUSPEND, "id_wakelock");
+
 	ret = dwc3_msm_config_gdsc(mdwc, 1);
 	if (ret) {
 		dev_err(&pdev->dev, "unable to configure usb3 gdsc\n");
@@ -3157,6 +3214,7 @@ static int __devinit dwc3_msm_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "irqreq HSPHYINT failed\n");
 			goto disable_hs_ldo;
 		}
+		enable_irq_wake(mdwc->hs_phy_irq);
 	}
 
 	if (mdwc->ext_xceiv.otg_capability) {
@@ -3188,9 +3246,12 @@ static int __devinit dwc3_msm_probe(struct platform_device *pdev)
 				/* Update initial ID state */
 				mdwc->id_state =
 					!!irq_read_line(mdwc->pmic_id_irq);
-				if (mdwc->id_state == DWC3_ID_GROUND)
+				if (mdwc->id_state == DWC3_ID_GROUND) {
+					wake_lock_timeout(&mdwc->id_wakelock,
+						USB_ID_WAKE_LOCK_TIMEOUT);
 					queue_work(system_nrt_wq,
 							&mdwc->id_work);
+				}
 				local_irq_restore(flags);
 				enable_irq_wake(mdwc->pmic_id_irq);
 			}
@@ -3459,6 +3520,8 @@ static int __devexit dwc3_msm_remove(struct platform_device *pdev)
 		class_destroy(mdwc->ext_chg_class);
 		unregister_chrdev_region(mdwc->ext_chg_dev, 1);
 	}
+
+	wake_lock_destroy(&mdwc->id_wakelock);
 
 	if (mdwc->id_adc_detect)
 		qpnp_adc_tm_usbid_end(mdwc->adc_tm_dev);

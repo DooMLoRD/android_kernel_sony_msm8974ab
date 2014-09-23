@@ -1,6 +1,6 @@
 
 /* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
- * Copyright (C) 2012-2014 Sony Mobile Communications AB.
+ * Copyright (c) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -38,13 +38,15 @@
 #define DSI_PCLK_MAX 223000000
 #define DSI_PCLK_DEFAULT 35000000
 
+#define CHANGE_FPS_MIN 36
+#define CHANGE_FPS_MAX 63
+
 struct device virtdev;
 
 struct fps_array {
 	u32 frame_nbr;
 	u32 time_delta;
 };
-static u16 fps_array_cnt;
 
 static struct fps_data {
 	struct mutex fps_lock;
@@ -57,7 +59,8 @@ static struct fps_data {
 	struct timespec fpks_ts_last;
 	u16 fa_last_array_pos;
 	struct fps_array fa[DEFAULT_FPS_ARRAY_SIZE];
-} fpsd;
+	u16 fps_array_cnt;
+} vpsd, fpsd;
 
 DEFINE_LED_TRIGGER(bl_led_trigger);
 
@@ -69,11 +72,15 @@ static int lcd_id;
 static uint32_t lcdid_adc;
 static bool adc_det;
 static bool display_on_in_boot;
+static bool display_onoff_state;
 static int mdss_dsi_panel_detect(struct mdss_panel_data *pdata);
 static int mdss_panel_parse_dt(struct device_node *np,
 				struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 				int driver_ic, char *id_data);
 static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata);
+static void mdss_dsi_panel_regist_fps_handler(struct mdss_mdp_ctl *ctl);
+
+struct mdss_mdp_vsync_handler vs_handle;
 
 /* pcc data infomation */
 #define PANEL_SKIP_ID			0xff
@@ -351,6 +358,17 @@ static int mdss_dsi_panel_partial_update(struct mdss_panel_data *pdata)
 	return rc;
 }
 
+static struct mdss_dsi_ctrl_pdata *get_rctrl_data(struct mdss_panel_data *pdata)
+{
+	if (!pdata || !pdata->next) {
+		pr_err("%s: Invalid panel data\n", __func__);
+		return NULL;
+	}
+
+	return container_of(pdata->next, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+}
+
 static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 							u32 bl_level)
 {
@@ -382,15 +400,15 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		break;
 	case BL_DCS_CMD:
 		mdss_dsi_panel_bklt_dcs(ctrl_pdata, bl_level);
-		if (mdss_dsi_is_master_ctrl(ctrl_pdata)) {
-			struct mdss_dsi_ctrl_pdata *sctrl =
-				mdss_dsi_get_slave_ctrl();
-			if (!sctrl) {
-				pr_err("%s: Invalid slave ctrl data\n",
-					__func__);
+		if (ctrl_pdata->shared_pdata.broadcast_enable &&
+				ctrl_pdata->ndx == DSI_CTRL_0) {
+			struct mdss_dsi_ctrl_pdata *rctrl_pdata = NULL;
+			rctrl_pdata = get_rctrl_data(pdata);
+			if (!rctrl_pdata) {
+				pr_err("%s: Right ctrl data NULL\n", __func__);
 				return;
 			}
-			mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
+			mdss_dsi_panel_bklt_dcs(rctrl_pdata, bl_level);
 		}
 		break;
 	default:
@@ -403,7 +421,7 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 static void mdss_dsi_panel_fps_array_clear(struct fps_data *fps)
 {
 	memset(fps->fa, 0, sizeof(fps->fa));
-	fps_array_cnt = 0;
+	fps->fps_array_cnt = 0;
 }
 
 static ssize_t mdss_dsi_panel_frame_counter(struct device *dev,
@@ -416,6 +434,12 @@ static ssize_t mdss_dsi_panel_frames_per_ksecs(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%i\n", fpsd.fpks);
+}
+
+static ssize_t mdss_dsi_panel_vsyncs_per_ksecs(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%i\n", vpsd.fpks);
 }
 
 static ssize_t mdss_dsi_panel_interval_ms_show(struct device *dev,
@@ -488,6 +512,11 @@ static ssize_t mdss_dsi_panel_interval_array_ms(struct device *dev,
 	/* Clear the buffer once it is read */
 	mdss_dsi_panel_fps_array_clear(&fpsd);
 	mutex_unlock(&fpsd.fps_lock);
+
+	mutex_lock(&vpsd.fps_lock);
+	/* Clear the buffer once it is read */
+	mdss_dsi_panel_fps_array_clear(&vpsd);
+	mutex_unlock(&vpsd.fps_lock);
 
 	return rc;
 }
@@ -585,23 +614,42 @@ exit:
 	return scnprintf(buf, PAGE_SIZE, "0x%x 0x%x 0x%x ", r, g, b);
 }
 
-static ssize_t mdss_dsi_panel_change_fps_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
+#define CHENGE_FPS_REG (ctrl_pdata->fps_cmds.cmds[1].payload[1])
+#define TE_PAYLOAD_1(a, b) (ctrl_pdata->fps_cmds.cmds[a].payload[b])
+#define TE_PAYLOAD_2(a, b) (ctrl_pdata->fps_cmds.cmds[a].payload[(b + 1)])
+#define TE_CMD_SIZE(a) (ctrl_pdata->fps_cmds.cmds[a].dchdr.dlen)
+
+static int mdss_dsi_panel_change_fps_fpks_calc
+		(struct mdss_dsi_ctrl_pdata *ctrl_pdata, int dfpks) {
 	int dfps;
-	struct mdss_dsi_ctrl_pdata *ctrl_pdata = dev_get_drvdata(dev);
+	int dfpks_rev;
 	int rc = 0;
-	u32 vt, v_total, vfp, cur_vfp;
+	u32 vt, v_total, cur_vfp;
+	u32 vfp, vbp, yres, clk;
+	u32 te_c_update, tec_cmds, tec_payload;
 	static int line_us;
 	struct mdss_panel_specific_pdata *spec_pdata = NULL;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	struct msm_fb_data_type *mfd = mdata->ctl_off->mfd;
 	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
+	struct mdss_panel_info *pinfo = &ctrl_pdata->panel_data.panel_info;
+	char rtn;
 
 	if (!mdp5_data->ctl || !mdp5_data->ctl->power_on)
 		return 0;
 
-	rc = kstrtoint(buf, 10, &dfps);
+	if (!display_onoff_state) {
+		pr_err("%s: Disp-On still hasn't been completed. Please retry\n"
+			, __func__);
+		return -EINVAL;
+	}
+
+	if (dfpks == pinfo->mipi.input_fpks) {
+		pr_info("%s: fpks is already %d\n", __func__, dfpks);
+		return 0;
+	}
+
+	dfps = dfpks / 1000;
 
 	spec_pdata = ctrl_pdata->spec_pdata;
 	if (!spec_pdata) {
@@ -609,29 +657,164 @@ static ssize_t mdss_dsi_panel_change_fps_store(struct device *dev,
 		return -EINVAL;
 	}
 
-	if (!line_us) {
-		vt = mdss_panel_get_vtotal(&ctrl_pdata->panel_data.panel_info);
-		line_us = (NSEC_PER_SEC / 60) / vt;
+	if (pinfo->mipi.mode == DSI_CMD_MODE) {
+		if (!ctrl_pdata->fps_cmds.cmd_cnt) {
+			pr_err("%s: change fps isn't supported\n", __func__);
+			return -EINVAL;
+		}
+
+		clk = pinfo->lcdc.display_clock;
+		vbp = pinfo->lcdc.driver_ic_vbp;
+		vfp = pinfo->lcdc.driver_ic_vfp;
+		yres = pinfo->yres;
+
+		rtn = (char)(clk / (dfpks * (yres + vbp + vfp) / 1000));
+		pr_debug("%s: [fpks]: reg value = %08x\n", __func__, rtn);
+		dfpks_rev = (clk / (rtn * (yres + vbp + vfp) / 1000));
+		dfps = dfpks_rev / 1000;
+
+		pr_info("%s: clk=%d vbp=%d vfp=%d yres=%d rtn=0x%x\n",
+			__func__, clk, vbp, vfp, yres, rtn);
+
+		CHENGE_FPS_REG = rtn;
+
+		pinfo->mipi.frame_rate = dfps;
+
+		te_c_update = pinfo->lcdc.te_c_update;
+		if (te_c_update) {
+			tec_cmds = pinfo->lcdc.te_c_cmds_num;
+			tec_payload = pinfo->lcdc.te_c_payload_num;
+			if (dfpks > pinfo->lcdc.fps_threshold) {
+				/* 60fps Setting */
+				TE_PAYLOAD_1(tec_cmds, tec_payload)
+				 = (char)pinfo->lcdc.te_c_mode_60fps_0;
+				if (TE_CMD_SIZE(tec_cmds) == 3)
+					TE_PAYLOAD_2(tec_cmds, tec_payload)
+					 = (char)pinfo->lcdc.te_c_mode_60fps_1;
+			} else {
+				/* 45fps Setting */
+				TE_PAYLOAD_1(tec_cmds, tec_payload)
+				 = (char)pinfo->lcdc.te_c_mode_45fps_0;
+				if (TE_CMD_SIZE(tec_cmds) == 3)
+					TE_PAYLOAD_2(tec_cmds, tec_payload)
+					 = (char)pinfo->lcdc.te_c_mode_45fps_1;
+			}
+
+			if (TE_CMD_SIZE(tec_cmds) == 3)
+				pr_debug("%s: TE C Command:0x%02x 0x%02x\n",
+					__func__,
+					TE_PAYLOAD_1(tec_cmds, tec_payload),
+					TE_PAYLOAD_2(tec_cmds, tec_payload));
+			else
+				pr_debug("%s: TE C Command:0x%02x\n",
+					__func__,
+					TE_PAYLOAD_1(tec_cmds, tec_payload));
+		}
+
+		pr_debug("%s: fps change sequence\n", __func__);
+		mdss_dsi_panel_cmds_send(ctrl_pdata, &ctrl_pdata->fps_cmds);
+
+		pr_info("%s: change fpks=%d\n", __func__, dfpks);
+
+	} else {
+		if (!line_us) {
+			vt = mdss_panel_get_vtotal(&ctrl_pdata
+						    ->panel_data.panel_info);
+			line_us = (NSEC_PER_SEC / 60) / vt;
+		}
+		v_total = (NSEC_PER_SEC / dfps) / line_us;
+		vfp = v_total
+			- (pinfo->lcdc.v_back_porch
+			+  pinfo->lcdc.v_pulse_width
+			+  pinfo->yres);
+
+		spec_pdata->new_vfp = vfp;
+		cur_vfp = pinfo->lcdc.v_front_porch;
+		pinfo->lcdc.v_front_porch = vfp;
+
+		rc = mdss_dsi_clk_div_config(pinfo, dfps);
+		ctrl_pdata->pclk_rate = pinfo->mipi.dsi_pclk_rate;
+		ctrl_pdata->byte_clk_rate = pinfo->clk_rate / 8;
+		pinfo->lcdc.v_front_porch = cur_vfp;
+		pr_info("%s: change fps=%d vfp=%d\n", __func__, dfps,
+				spec_pdata->new_vfp);
 	}
-	v_total = (NSEC_PER_SEC / dfps) / line_us;
-	vfp = v_total - (ctrl_pdata->panel_data.panel_info.lcdc.v_back_porch
-		+ ctrl_pdata->panel_data.panel_info.lcdc.v_pulse_width
-		+ ctrl_pdata->panel_data.panel_info.yres);
+	pinfo->new_fps         = dfps;
+	pinfo->mipi.input_fpks = dfpks;
 
-	spec_pdata->new_vfp = vfp;
-	cur_vfp = ctrl_pdata->panel_data.panel_info.lcdc.v_front_porch;
-	ctrl_pdata->panel_data.panel_info.lcdc.v_front_porch = vfp;
+	return 0;
+}
 
-	rc = mdss_dsi_clk_div_config
-		(&ctrl_pdata->panel_data.panel_info, dfps);
-	ctrl_pdata->pclk_rate =
-		ctrl_pdata->panel_data.panel_info.mipi.dsi_pclk_rate;
-	ctrl_pdata->byte_clk_rate =
-		ctrl_pdata->panel_data.panel_info.clk_rate / 8;
-	ctrl_pdata->panel_data.panel_info.new_fps = dfps;
-	ctrl_pdata->panel_data.panel_info.lcdc.v_front_porch = cur_vfp;
-	pr_info("%s: change fps=%d vfp=%d\n", __func__, dfps,
-			spec_pdata->new_vfp);
+static ssize_t mdss_dsi_panel_change_fpks_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = dev_get_drvdata(dev);
+	int dfpks, rc;
+
+	rc = kstrtoint(buf, 10, &dfpks);
+	if (rc < 0) {
+		pr_err("%s: Error, buf = %s\n", __func__, buf);
+		return rc;
+	}
+
+	if (dfpks < 1000 * CHANGE_FPS_MIN
+			|| dfpks > 1000 * CHANGE_FPS_MAX) {
+		pr_err("%s: invalid value for change_fpks buf = %s\n",
+				 __func__, buf);
+		return -EINVAL;
+	}
+
+	rc = mdss_dsi_panel_change_fps_fpks_calc(ctrl_pdata, dfpks);
+	if (rc) {
+		pr_err("%s: Error, rc = %d\n", __func__, rc);
+		return rc;
+	}
+	return count;
+}
+
+static ssize_t mdss_dsi_panel_change_fpks_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = dev_get_drvdata(dev);
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	struct msm_fb_data_type *mfd = mdata->ctl_off->mfd;
+	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
+
+	if (!mdp5_data->ctl || !mdp5_data->ctl->power_on)
+		return 0;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+		ctrl_pdata->panel_data.panel_info.mipi.input_fpks);
+}
+
+static ssize_t mdss_dsi_panel_change_fps_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = dev_get_drvdata(dev);
+	int dfps, dfpks, rc;
+
+	rc = kstrtoint(buf, 10, &dfps);
+	if (rc < 0) {
+		pr_err("%s: Error, buf = %s\n", __func__, buf);
+		return rc;
+	}
+
+	if (dfps >= 1000 * CHANGE_FPS_MIN
+			&& dfps <= 1000 * CHANGE_FPS_MAX) {
+		dfpks = dfps;
+	} else if (dfps >= CHANGE_FPS_MIN && dfps <= CHANGE_FPS_MAX) {
+		dfpks = dfps * 1000;
+	} else {
+		pr_err("%s: invalid value for change_fps buf = %s\n",
+				__func__, buf);
+		return -EINVAL;
+	}
+
+	rc = mdss_dsi_panel_change_fps_fpks_calc(ctrl_pdata, dfpks);
+	if (rc) {
+		pr_err("%s: Error, rc = %d\n", __func__, rc);
+		return rc;
+	}
 
 	return count;
 }
@@ -648,13 +831,61 @@ static ssize_t mdss_dsi_panel_change_fps_show(struct device *dev,
 		return 0;
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n",
-		ctrl_pdata->panel_data.panel_info.mipi.frame_rate);
+		ctrl_pdata->panel_data.panel_info.new_fps);
+}
+
+static void mdss_dsi_panel_wait_change(
+		struct mdss_dsi_ctrl_pdata *ctrl_pdata, bool onoff)
+{
+	struct mdss_panel_info *pinfo = &ctrl_pdata->panel_data.panel_info;
+	struct dsi_cmd_desc *cmds_cmds = NULL;
+	char *wait = NULL;
+	char wait_60fps, wait_45fps;
+	u32 te_c_update = pinfo->lcdc.te_c_update;
+	u32 wait_update = pinfo->lcdc.chenge_wait_update;
+	u32 fpks = pinfo->mipi.input_fpks;
+	u32 cmds_num;
+
+	if (!(te_c_update && wait_update))
+		goto exit;
+
+	if (onoff) {
+		cmds_num = pinfo->lcdc.chenge_wait_on_cmds_num;
+		cmds_cmds = &ctrl_pdata->on_cmds.cmds[cmds_num];
+		if (cmds_cmds)
+			wait = &ctrl_pdata->on_cmds.cmds[cmds_num].dchdr.wait;
+		else
+			goto exit;
+
+		wait_60fps = (char)pinfo->lcdc.chenge_wait_on_60fps;
+		wait_45fps = (char)pinfo->lcdc.chenge_wait_on_45fps;
+	} else {
+		cmds_num = pinfo->lcdc.chenge_wait_off_cmds_num;
+		cmds_cmds = &ctrl_pdata->off_cmds.cmds[cmds_num];
+		if (cmds_cmds)
+			wait = &ctrl_pdata->off_cmds.cmds[cmds_num].dchdr.wait;
+		else
+			goto exit;
+
+		wait_60fps = (char)pinfo->lcdc.chenge_wait_off_60fps;
+		wait_45fps = (char)pinfo->lcdc.chenge_wait_off_45fps;
+	}
+
+	if (fpks > pinfo->lcdc.fps_threshold)
+		*wait = wait_60fps;
+	else
+		*wait = wait_45fps;
+	pr_debug("%s: onoff[%d] wait = %d\n", __func__, onoff, *wait);
+exit:
+	return;
 }
 
 static struct device_attribute panel_attributes[] = {
 	__ATTR(frame_counter, S_IRUGO, mdss_dsi_panel_frame_counter, NULL),
 	__ATTR(frames_per_ksecs, S_IRUGO,
 				mdss_dsi_panel_frames_per_ksecs, NULL),
+	__ATTR(vsyncs_per_ksecs, S_IRUGO,
+				mdss_dsi_panel_vsyncs_per_ksecs, NULL),
 	__ATTR(interval_ms, S_IRUGO, mdss_dsi_panel_interval_ms_show, NULL),
 	__ATTR(log_interval, S_IRUGO|S_IWUSR|S_IWGRP,
 					mdss_dsi_panel_log_interval_show,
@@ -668,6 +899,9 @@ static struct device_attribute panel_attributes[] = {
 	__ATTR(change_fps, S_IRUGO|S_IWUSR|S_IWGRP,
 					mdss_dsi_panel_change_fps_show,
 					mdss_dsi_panel_change_fps_store),
+	__ATTR(change_fpks, S_IRUGO|S_IWUSR|S_IWGRP,
+					mdss_dsi_panel_change_fpks_show,
+					mdss_dsi_panel_change_fpks_store),
 };
 
 static int register_attributes(struct device *dev)
@@ -689,6 +923,8 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	struct mipi_panel_info *mipi;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_panel_specific_pdata *spec_pdata = NULL;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	struct mdss_mdp_ctl *ctl = mdata->ctl_off;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -706,8 +942,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 
 	if (!spec_pdata->detected && !spec_pdata->init_from_begin)
 		return 0;
-
-	pr_info("%s: ctrl=%p ndx=%d\n", __func__, ctrl_pdata, ctrl_pdata->ndx);
 
 	mipi = &pdata->panel_info.mipi;
 
@@ -731,14 +965,29 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		spec_pdata->cabc_active = 1;
 	}
 
+	if (ctl->add_vsync_handler)
+		mdss_dsi_panel_regist_fps_handler(ctl);
+
 	if (spec_pdata->init_cmds.cmd_cnt) {
 		pr_debug("%s: init (exit sleep) sequence\n", __func__);
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &spec_pdata->init_cmds);
 	}
 
 	if (ctrl_pdata->on_cmds.cmd_cnt && !spec_pdata->disp_on_in_hs) {
+		mdss_dsi_panel_wait_change(ctrl_pdata, true);
 		pr_debug("%s: panel on sequence (in low speed)\n", __func__);
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &ctrl_pdata->on_cmds);
+		display_onoff_state = true;
+		pr_info("%s: ctrl=%p ndx=%d\n", __func__, ctrl_pdata, ctrl_pdata->ndx);
+	}
+
+	if (ctrl_pdata->panel_data.panel_info.mipi.mode == DSI_CMD_MODE) {
+		if (ctrl_pdata->fps_cmds.cmd_cnt) {
+			pr_debug("%s: change fps sequence --- rtn = 0x%x\n",
+						__func__, CHENGE_FPS_REG);
+			mdss_dsi_panel_cmds_send(ctrl_pdata,
+						&ctrl_pdata->fps_cmds);
+		}
 	}
 
 	pr_debug("%s:-\n", __func__);
@@ -781,8 +1030,11 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 
 	mipi = &pdata->panel_info.mipi;
 
-	if (ctrl_pdata->off_cmds.cmd_cnt)
+	if (ctrl_pdata->off_cmds.cmd_cnt) {
+		mdss_dsi_panel_wait_change(ctrl_pdata, false);
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &ctrl_pdata->off_cmds);
+		display_onoff_state = false;
+	}
 
 	if (spec_pdata->cabc_active && (spec_pdata->cabc_enabled == 0)) {
 		pr_debug("%s: sending display off\n", __func__);
@@ -854,8 +1106,6 @@ static int mdss_dsi_panel_disp_on(struct mdss_panel_data *pdata)
 	if (!spec_pdata->detected)
 		return 0;
 
-	pr_debug("%s: ctrl=%p ndx=%d\n", __func__, ctrl_pdata, ctrl_pdata->ndx);
-
 	mipi = &pdata->panel_info.mipi;
 
 	if ((spec_pdata->cabc_on_cmds.cmd_cnt && spec_pdata->cabc_enabled) ||
@@ -872,8 +1122,11 @@ static int mdss_dsi_panel_disp_on(struct mdss_panel_data *pdata)
 
 	if (ctrl_pdata->on_cmds.cmd_cnt && spec_pdata->disp_on_in_hs) {
 		pr_debug("%s: panel on sequence (in high speed)\n", __func__);
-		mdss_dsi_set_tx_power_mode(0, pdata);
+		mdss_dsi_panel_wait_change(ctrl_pdata, true);
+		mdss_set_tx_power_mode(0, pdata);
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &ctrl_pdata->on_cmds);
+		display_onoff_state = true;
+		pr_info("%s: ctrl=%p ndx=%d\n", __func__, ctrl_pdata, ctrl_pdata->ndx);
 	}
 	if (spec_pdata->cabc_deferred_on_cmds.cmd_cnt &&
 				spec_pdata->cabc_enabled) {
@@ -1085,12 +1338,12 @@ static void update_fps_data(struct fps_data *fps)
 		fps->frame_counter++;
 		num_frames = fps->frame_counter - fps->frame_counter_last;
 
-		fps->fa[fps_array_cnt].frame_nbr = fps->frame_counter;
-		fps->fa[fps_array_cnt].time_delta = msec;
-		fps->fa_last_array_pos = fps_array_cnt;
-		fps_array_cnt++;
-		if (fps_array_cnt >= DEFAULT_FPS_ARRAY_SIZE)
-			fps_array_cnt = 0;
+		fps->fa[fps->fps_array_cnt].frame_nbr = fps->frame_counter;
+		fps->fa[fps->fps_array_cnt].time_delta = msec;
+		fps->fa_last_array_pos = fps->fps_array_cnt;
+		(fps->fps_array_cnt)++;
+		if (fps->fps_array_cnt >= DEFAULT_FPS_ARRAY_SIZE)
+			fps->fps_array_cnt = 0;
 
 		ms_since_last = ts_diff_ms(tnow, fps->fpks_ts_last);
 
@@ -1117,11 +1370,41 @@ static void mdss_dsi_panel_fps_data_init(struct fps_data *fps)
 
 int mdss_dsi_panel_fps_data_update(struct msm_fb_data_type *mfd)
 {
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	struct mdss_mdp_ctl *ctl = mdata->ctl_off;
+
+	if (ctl->add_vsync_handler && (vs_handle.vsync_handler == NULL))
+		mdss_dsi_panel_regist_fps_handler(ctl);
+
 	/* Only count fps on primary display */
 	if (mfd->index == 0)
 		update_fps_data(&fpsd);
 
 	return 0;
+}
+
+static void mdss_dsi_panel_vps_data_update(struct msm_fb_data_type *mfd)
+{
+	/* Only count vpks(hw vsyncs per ksecs) on primary display */
+	if (mfd->index == 0)
+		update_fps_data(&vpsd);
+}
+
+void vsync_handler(struct mdss_mdp_ctl *ctl, ktime_t t)
+{
+	struct msm_fb_data_type *mfd = ctl->mfd;
+
+	mdss_dsi_panel_vps_data_update(mfd);
+}
+
+static void mdss_dsi_panel_regist_fps_handler(struct mdss_mdp_ctl *ctl)
+{
+	vs_handle.vsync_handler = (mdp_vsync_handler_t)vsync_handler;
+	vs_handle.cmd_post_flush = false;
+	vs_handle.enabled = false;
+
+	if (ctl->add_vsync_handler)
+		ctl->add_vsync_handler(ctl, &vs_handle);
 }
 
 static void conv_uv_data(char *data, int param_type, int *u_data, int *v_data)
@@ -1194,6 +1477,9 @@ static void get_uv_data(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 
 	len = get_uv_param_len(param_type, &short_response);
 
+	mdss_dsi_cmd_mdp_busy(ctrl_pdata);
+	mdss_bus_bandwidth_ctrl(1);
+	mdss_dsi_clk_ctrl(ctrl_pdata, 1);
 	for (i = 0; i < ctrl_pdata->spec_pdata->uv_read_cmds.cmd_cnt; i++) {
 		if (short_response)
 			mdss_dsi_cmds_rx(ctrl_pdata, cmds, 0);
@@ -1203,6 +1489,8 @@ static void get_uv_data(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 		pos += len;
 		cmds++;
 	}
+	mdss_dsi_clk_ctrl(ctrl_pdata, 0);
+	mdss_bus_bandwidth_ctrl(0);
 	conv_uv_data(buf, param_type, u_data, v_data);
 }
 
@@ -1240,6 +1528,7 @@ static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_pcc_data *pcc_data = NULL;
+	struct mdss_panel_info *pinfo = NULL;
 	int ret;
 	u32 copyback;
 	struct mdp_pcc_cfg_data pcc_config;
@@ -1270,6 +1559,25 @@ static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata)
 		goto exit;
 
 	memset(&pcc_config, 0, sizeof(struct mdp_pcc_cfg_data));
+
+	pinfo = &ctrl_pdata->panel_data.panel_info;
+	if (pinfo->rev_u[1] != 0) {
+		if (pinfo->rev_u[0] == 0)
+			pcc_data->u_data = pcc_data->u_data + pinfo->rev_u[1];
+		else if (pcc_data->u_data < pinfo->rev_u[1])
+			pcc_data->u_data = 0;
+		else
+			pcc_data->u_data = pcc_data->u_data - pinfo->rev_u[1];
+	}
+	if (pinfo->rev_v[1] != 0) {
+		if (pinfo->rev_v[0] == 0)
+			pcc_data->v_data = pcc_data->v_data + pinfo->rev_v[1];
+		else if (pcc_data->v_data < pinfo->rev_v[1])
+			pcc_data->v_data = 0;
+		else
+			pcc_data->v_data = pcc_data->v_data - pinfo->rev_v[1];
+	}
+
 	ret = find_color_area(&pcc_config, pcc_data);
 	if (ret)
 		goto exit;
@@ -1281,6 +1589,12 @@ static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata)
 		if (ret != 0)
 			pr_err("failed by settings of pcc data.\n");
 	}
+
+	if (pinfo->rev_u[1] != 0 && pinfo->rev_v[1] != 0)
+		pr_info("%s (%d):(ru[0], ru[1])=(%d, %d), (rv[0], rv[1])=(%d, %d)",
+			__func__, __LINE__,
+			pinfo->rev_u[0], pinfo->rev_u[1],
+			pinfo->rev_v[0], pinfo->rev_v[1]);
 
 	pr_info("%s (%d):ct=%d area=%d ud=%d vd=%d r=0x%08X g=0x%08X b=0x%08X",
 		__func__, __LINE__,
@@ -1536,35 +1850,6 @@ static int mdss_panel_dt_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
 	return rc;
 }
 
-static int mdss_dsi_parse_panel_features(struct device_node *np,
-	struct mdss_dsi_ctrl_pdata *ctrl)
-{
-	struct mdss_panel_info *pinfo;
-
-	if (!np || !ctrl) {
-		pr_err("%s: Invalid arguments\n", __func__);
-		return -ENODEV;
-	}
-
-	pinfo = &ctrl->panel_data.panel_info;
-
-	pinfo->cont_splash_enabled = of_property_read_bool(np,
-		"qcom,cont-splash-enabled");
-
-	pinfo->partial_update_enabled = of_property_read_bool(np,
-		"qcom,partial-update-enabled");
-	pr_info("%s:%d Partial update %s\n", __func__, __LINE__,
-		(pinfo->partial_update_enabled ? "enabled" : "disabled"));
-	if (pinfo->partial_update_enabled)
-		ctrl->partial_update_fnc = mdss_dsi_panel_partial_update;
-
-	pinfo->ulps_feature_enabled = of_property_read_bool(np,
-		"qcom,ulps-enabled");
-	pr_info("%s: ulps feature %s", __func__,
-		(pinfo->ulps_feature_enabled ? "enabled" : "disabled"));
-
-	return 0;
-}
 
 static int mdss_dsi_parse_fbc_params(struct device_node *np,
 				struct mdss_panel_info *panel_info)
@@ -1997,6 +2282,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		rc = of_property_read_u32(next,
 			"qcom,mdss-dsi-panel-framerate", &tmp);
 		pinfo->mipi.frame_rate = !rc ? tmp : 60;
+		pinfo->mipi.input_fpks = pinfo->mipi.frame_rate * 1000;
 		rc = of_property_read_u32(next,
 			"qcom,mdss-dsi-panel-clockrate", &tmp);
 		pinfo->clk_rate = !rc ? tmp : 0;
@@ -2182,15 +2468,78 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			&spec_pdata->off_seq.seq_b_num);
 		rc = of_property_read_u32(next, "somc,pw-down-period", &tmp);
 		spec_pdata->down_period = !rc ? tmp : 0;
+
+		mdss_dsi_parse_dcs_cmds(next, &ctrl_pdata->fps_cmds,
+			"somc,chenge-fps-command", NULL);
+		rc = of_property_read_u32(next,
+			"somc,fps_default", &tmp);
+		pinfo->lcdc.fps_default = !rc ? tmp : 0x8E;
+		rc = of_property_read_u32(next,
+			"somc,display-clock", &tmp);
+		pinfo->lcdc.display_clock = !rc ? tmp : 17;
+		rc = of_property_read_u32(next,
+			"somc,driver-ic-vbp", &tmp);
+		pinfo->lcdc.driver_ic_vbp = !rc ? tmp : 2;
+		rc = of_property_read_u32(next,
+			"somc,driver-ic-vfp", &tmp);
+		pinfo->lcdc.driver_ic_vfp = !rc ? tmp : 6;
+		rc = of_property_read_u32_array(next,
+			"somc,mdss-dsi-u-rev", res, 2);
+		if (rc) {
+			pinfo->rev_u[0] = 0;
+			pinfo->rev_u[1] = 0;
+		} else {
+			pinfo->rev_u[0] = res[0];
+			pinfo->rev_u[1] = res[1];
+		}
+		rc = of_property_read_u32_array(next,
+			"somc,mdss-dsi-v-rev", res, 2);
+		if (rc) {
+			pinfo->rev_v[0] = 0;
+			pinfo->rev_v[1] = 0;
+		} else {
+			pinfo->rev_v[0] = res[0];
+			pinfo->rev_v[1] = res[1];
+		}
+
+		rc = of_property_read_u32(next,
+			"somc,chenge-wait-update", &tmp);
+		pinfo->lcdc.chenge_wait_update =  !rc ? tmp : 0;
+		rc = of_property_read_u32_array(next,
+			"somc,chenge-wait-on", res, 2);
+		pinfo->lcdc.chenge_wait_on_60fps = !rc ? res[0] : 0;
+		pinfo->lcdc.chenge_wait_on_45fps = !rc ? res[1] : 0;
+		rc = of_property_read_u32_array(next,
+			"somc,chenge-wait-off", res, 2);
+		pinfo->lcdc.chenge_wait_off_60fps = !rc ? res[0] : 0;
+		pinfo->lcdc.chenge_wait_off_45fps = !rc ? res[1] : 0;
+		rc = of_property_read_u32_array(next,
+			"somc,chenge-wait-cmds-num", res, 2);
+		pinfo->lcdc.chenge_wait_on_cmds_num = !rc ? res[0] : 0;
+		pinfo->lcdc.chenge_wait_off_cmds_num = !rc ? res[1] : 0;
+		rc = of_property_read_u32(next,
+			"somc,fps-threshold", &tmp);
+		pinfo->lcdc.fps_threshold =  !rc ? tmp : 0;
+		rc = of_property_read_u32(next,
+			"somc,te-c-update", &tmp);
+		pinfo->lcdc.te_c_update =  !rc ? tmp : 0;
+		rc = of_property_read_u32_array(next,
+			"somc,te-c-mode-60fps", res, 2);
+		pinfo->lcdc.te_c_mode_60fps_0 = !rc ? res[0] : 0;
+		pinfo->lcdc.te_c_mode_60fps_1 = !rc ? res[1] : 0;
+		rc = of_property_read_u32_array(next,
+			"somc,te-c-mode-45fps", res, 2);
+		pinfo->lcdc.te_c_mode_45fps_0 = !rc ? res[0] : 0;
+		pinfo->lcdc.te_c_mode_45fps_1 = !rc ? res[1] : 0;
+		rc = of_property_read_u32(next,
+			"somc,te-c-cmds-num", &tmp);
+		pinfo->lcdc.te_c_cmds_num =  !rc ? tmp : 0;
+		rc = of_property_read_u32(next,
+			"somc,te-c-payload-num", &tmp);
+		pinfo->lcdc.te_c_payload_num =  !rc ? tmp : 0;
+
 		break;
 	}
-
-	rc = mdss_dsi_parse_panel_features(next, ctrl_pdata);
-	if (rc) {
-		pr_err("%s: failed to parse panel features\n", __func__);
-		goto error;
-	}
-
 	return 0;
 
 error:
@@ -2204,14 +2553,9 @@ int mdss_dsi_panel_init(struct device_node *node,
 	int rc = 0;
 	char *path_name = "mdss_dsi_panel";
 	struct device_node *dsi_ctrl_np = NULL;
-	struct mdss_panel_info *pinfo;
+	bool cont_splash_enabled;
+	bool partial_update_enabled;
 	struct mdss_panel_specific_pdata *spec_pdata = NULL;
-
-	if (!node || !ctrl_pdata) {
-		pr_err("%s: Invalid arguments\n", __func__);
-		return -ENODEV;
-	}
-	pinfo = &ctrl_pdata->panel_data.panel_info;
 
 	dev_set_name(&virtdev, "%s", path_name);
 	rc = device_register(&virtdev);
@@ -2289,10 +2633,32 @@ exit_lcd_id:
 	if (rc)
 		goto error;
 
-	if (!display_on_in_boot)
-		pinfo->cont_splash_enabled = false;
-	pr_info("%s: Continuous splash %s", __func__,
-		pinfo->cont_splash_enabled ? "enabled" : "disabled");
+	cont_splash_enabled = display_on_in_boot;
+
+	if (!cont_splash_enabled) {
+		pr_info("%s:%d Continuous splash flag not found.\n",
+				__func__, __LINE__);
+		ctrl_pdata->panel_data.panel_info.cont_splash_enabled = 0;
+		display_onoff_state = false;
+	} else {
+		pr_info("%s:%d Continuous splash flag enabled.\n",
+				__func__, __LINE__);
+
+		ctrl_pdata->panel_data.panel_info.cont_splash_enabled = 1;
+		display_onoff_state = true;
+	}
+
+	partial_update_enabled = of_property_read_bool(node,
+						"qcom,partial-update-enabled");
+	if (partial_update_enabled) {
+		pr_info("%s:%d Partial update enabled.\n", __func__, __LINE__);
+		ctrl_pdata->panel_data.panel_info.partial_update_enabled = 1;
+		ctrl_pdata->partial_update_fnc = mdss_dsi_panel_partial_update;
+	} else {
+		pr_info("%s:%d Partial update disabled.\n", __func__, __LINE__);
+		ctrl_pdata->panel_data.panel_info.partial_update_enabled = 0;
+		ctrl_pdata->partial_update_fnc = NULL;
+	}
 
 	if (!adc_det) {
 		spec_pdata->detect = mdss_dsi_panel_detect;
@@ -2309,6 +2675,9 @@ exit_lcd_id:
 	ctrl_pdata->panel_data.set_backlight = mdss_dsi_panel_bl_ctrl;
 
 	mdss_dsi_panel_fps_data_init(&fpsd);
+	mdss_dsi_panel_fps_data_init(&vpsd);
+
+	vs_handle.vsync_handler = NULL;
 
 	return 0;
 error:

@@ -1,6 +1,6 @@
 /* drivers/input/misc/bu520x1nvx.c
  *
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013-2014 Sony Mobile Communications AB.
  *
  * Author: Takashi Shiina <takashi.shiina@sonymobile.com>
  *         Tadashi Kubo <tadashi.kubo@sonymobile.com>
@@ -25,9 +25,11 @@
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
+#include <linux/switch.h>
 #include <linux/types.h>
 
 #define BU520X1NVX_DEV_NAME "bu520x1nvx"
+#define BU520X1NVX_SWITCH_NAME "lid"
 
 #define DETECTION_DELAY 50
 #define DETECTION_CYCLES 4
@@ -37,15 +39,22 @@
 
 struct bu520x1nvx_drvdata {
 	struct input_dev *input_dev;
+	struct switch_dev switch_dev;
 	int gpio_num;
 
 	atomic_t detect_cycle;
 	atomic_t detection_in_progress;
+	struct mutex lock;
 
 	int current_state;
 
 	struct timer_list det_timer;
 	struct work_struct det_work;
+};
+
+enum bu520x1nvx_switch_state {
+	LID_OPEN,
+	LID_CLOSE,
 };
 
 static irqreturn_t bu520x1nvx_isr(int irq, void *data)
@@ -54,6 +63,12 @@ static irqreturn_t bu520x1nvx_isr(int irq, void *data)
 
 	atomic_set(&ddata->detect_cycle, 0);
 	atomic_set(&ddata->detection_in_progress, 1);
+
+	mutex_lock(&ddata->lock);
+	switch_set_state(&ddata->switch_dev,
+		gpio_get_value(ddata->gpio_num) ? LID_OPEN : LID_CLOSE);
+	mutex_unlock(&ddata->lock);
+
 	mod_timer(&ddata->det_timer, DETECT_WORK_DELAY);
 
 	return IRQ_HANDLED;
@@ -99,6 +114,11 @@ static int bu520x1nvx_open(struct input_dev *idev)
 	atomic_set(&ddata->detection_in_progress, 1);
 	mod_timer(&ddata->det_timer, DETECT_WORK_DELAY);
 
+	mutex_lock(&ddata->lock);
+	switch_set_state(&ddata->switch_dev,
+		gpio_get_value(ddata->gpio_num) ? LID_OPEN : LID_CLOSE);
+	mutex_unlock(&ddata->lock);
+
 	return 0;
 }
 
@@ -135,6 +155,8 @@ static int bu520x1nvx_probe(struct platform_device *pdev)
 		goto fail_gpio_setup;
 	}
 
+	mutex_init(&ddata->lock);
+
 	input = input_allocate_device();
 	if (!input) {
 		dev_err(dev, "failed to allocate input_dev (%s)\n", __func__);
@@ -164,7 +186,15 @@ static int bu520x1nvx_probe(struct platform_device *pdev)
 		goto fail_input_register;
 	}
 
-	error = request_irq(gpio_to_irq(ddata->gpio_num),
+	ddata->switch_dev.name = BU520X1NVX_SWITCH_NAME;
+	ddata->switch_dev.state = LID_OPEN;
+
+	error = switch_dev_register(&ddata->switch_dev);
+	if (0 > error)
+		goto fail_switch_reg;
+
+	error = request_threaded_irq(gpio_to_irq(ddata->gpio_num),
+			NULL,
 			bu520x1nvx_isr,
 			IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
 			BU520X1NVX_DEV_NAME, ddata);
@@ -178,14 +208,17 @@ static int bu520x1nvx_probe(struct platform_device *pdev)
 	return 0;
 
 fail_request_irq:
+	switch_dev_unregister(&ddata->switch_dev);
+fail_switch_reg:
 	input_unregister_device(input);
 	goto fail_input_alloc;
 fail_input_register:
 	input_free_device(input);
 fail_input_alloc:
+	mutex_destroy(&ddata->lock);
 	gpio_free(ddata->gpio_num);
 fail_gpio_setup:
-	kfree(ddata);
+	kzfree(ddata);
 fail_kzalloc:
 
 	return error;
@@ -195,13 +228,17 @@ static int bu520x1nvx_remove(struct platform_device *pdev)
 {
 	struct bu520x1nvx_drvdata *ddata = platform_get_drvdata(pdev);
 
+	switch_dev_unregister(&ddata->switch_dev);
+
 	input_unregister_device(ddata->input_dev);
+
+	mutex_destroy(&ddata->lock);
 
 	free_irq(gpio_to_irq(ddata->gpio_num), ddata);
 
 	gpio_free(ddata->gpio_num);
 
-	kfree(ddata);
+	kzfree(ddata);
 
 	return 0;
 }
@@ -249,5 +286,5 @@ static void __exit bu520x1nvx_exit(void)
 module_init(bu520x1nvx_init);
 module_exit(bu520x1nvx_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPLv2");
 

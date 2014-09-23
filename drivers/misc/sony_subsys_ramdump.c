@@ -1,4 +1,4 @@
-/* Copyright (c) 2013 Sony Mobile Communications AB.
+/* Copyright (c) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -103,12 +103,12 @@ static unsigned int event_poll(struct file *filp,
 static ssize_t event_read(struct file *filp, char __user *ubuf,
 		size_t cnt, loff_t *ppos)
 {
-	int r = SUBSYS_NAME_LEN;
+	int r = strnlen(rdev.buf, SUBSYS_NAME_LEN);
 	ssize_t size;
 
 	size = simple_read_from_buffer(ubuf, cnt, ppos, rdev.buf, r);
 	if (*ppos == r) {
-		rdev.buf[0] = '\0';
+		memset(rdev.buf, 0, sizeof(rdev.buf));
 		rdev.data_ready = 0;
 		complete(&rdev.ramdump_complete);
 	}

@@ -309,9 +309,9 @@ static int wakeup_irq_debug_init(void)
 	platform_set_drvdata(&wakeup_irq_device, p);
 
 	/*
-	 * by default it's enabled
+	 * by default it's disabled
 	 */
-	p->enabled = true;
+	p->enabled = false;
 	return 0;
 
 unregister_driver:

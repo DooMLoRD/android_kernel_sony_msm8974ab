@@ -2,7 +2,7 @@
  * TI LP855x Backlight Driver
  *
  * Copyright (C) 2011 Texas Instruments
- * Copyright (C) 2012-2013 Sony Mobile Communications AB.
+ * Copyright (c) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -67,6 +67,12 @@
 #define LP8556_I2C_CONFIG   ((ENABLE_BL << BL_CTL_SHFT) | \
 	(LP8556_I2C_ONLY << BRT_MODE_SHFT))
 #define LP8556_COMB2_CONFIG (LP8556_COMBINED2 << BRT_MODE_SHFT)
+
+/* DEVICE CONTROL- FAST register - LP8556 */
+#define FAST_SHFT       7
+#define LP8556_FAST     1
+#define LP8556_FAST_CTRL (LP8556_FAST << FAST_SHFT)
+#define LP8556_FAST_MASK   0x80
 
 /* ROM area boundary */
 #define EEPROM_START 0xA0
@@ -134,6 +140,17 @@ struct lp855x {
 	struct debug_dentry dd;
 #endif
 };
+
+static bool bl_on_in_boot;
+static int __init continous_splash_setup(char *str)
+{
+	if (!str)
+		return 0;
+	if (!strncmp(str, "on", 2))
+		bl_on_in_boot = true;
+	return 0;
+}
+__setup("display_status=", continous_splash_setup);
 
 static int lp855x_i2c_read(struct lp855x *lp, u8 reg, u8 *data, u8 len)
 {
@@ -363,6 +380,8 @@ static void lp855x_init_device(struct lp855x *lp)
 	struct lp855x_platform_data *pd = lp->pdata;
 
 	val = pd->device_control;
+	if (pd->device_control & LP8556_FAST_MASK)
+		val &= ~(ENABLE_BL << BL_CTL_SHFT);
 	ret = lp855x_write_byte(lp, DEVICE_CTRL, val);
 
 	if (pd->load_new_rom_data && pd->size_program) {
@@ -381,6 +400,11 @@ static void lp855x_init_device(struct lp855x *lp)
 
 			ret |= lp855x_write_byte(lp, addr, val);
 		}
+	}
+	if (pd->device_control & LP8556_FAST_MASK) {
+		val = pd->device_control;
+		val |= (ENABLE_BL << BL_CTL_SHFT);
+		ret = lp855x_write_byte(lp, DEVICE_CTRL, val);
 	}
 	ret |= lp855x_write_byte(lp, CFG3_CTRL, pd->cfg3);
 
@@ -529,6 +553,8 @@ static int lp855x_parse_dt(struct device *dev,
 		} else {
 			pdata->device_control = (pdata->mode == PWM_BASED) ?
 				PWM_CONFIG(LP8556) : I2C_CONFIG(LP8556);
+			if (of_property_read_bool(dev->of_node, "fast_ctrl"))
+				pdata->device_control |= (LP8556_FAST_CTRL);
 		}
 		break;
 	}
@@ -638,6 +664,8 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 	if (ret)
 		goto err_setup;
 
+	pdata->bl_on_in_boot = bl_on_in_boot;
+
 	ret = lp855x_setup(&cl->dev, pdata);
 	if (ret) {
 		goto err_setup;
@@ -667,7 +695,8 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 	spin_lock_init(&lp->lock);
 	INIT_WORK(&lp->work, lp855x_led_work);
 
-	lp855x_init_device(lp);
+	if (!bl_on_in_boot)
+		lp855x_init_device(lp);
 	ret = lp855x_write_byte(lp, BRIGHTNESS_CTRL, pdata->initial_brightness);
 	if (ret) {
 		dev_err(lp->dev, "can't set initial brightness (%d)\n" , ret);
@@ -679,7 +708,6 @@ static int lp855x_probe(struct i2c_client *cl, const struct i2c_device_id *id)
 		goto err_dev;
 	}
 	lp855x_create_debugfs(lp);
-
 	return ret;
 
 err_dev:

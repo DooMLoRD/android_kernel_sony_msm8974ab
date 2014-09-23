@@ -1,5 +1,5 @@
 /* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * NOTE: This file has been modified by Sony Mobile Communications AB.
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
  * Modifications are licensed under the License.
  */
 
@@ -574,7 +574,21 @@ static ssize_t hdmi_rda_cec_enable_compliance(struct device *dev,
 		DEV_ERR("%s: Invalid cec_ctrl\n", __func__);
 		return -EPERM;
 	}
-
+	/* This is workaround for fixing Google CTS fail:
+	 * "android.permission.cts.FileSystemPermissionTest-
+	 * testReadingSysFilesDoesntFail"
+	 * This test program will read enable_compliance file.
+	 * This will cause this register is accessed.
+	 * Phone crash when access this register during clock
+	 * is disable.
+	 * If hdmi panel power is off, then hdmi clock is disable.
+	 * So if hdmi panel power is off, return error.
+	 */
+	ret = hdmi_tx_is_HDMI_panel_power_on(dev);
+	if (ret <= 0) {
+		DEV_ERR("%s: HDMI clock is not enable\n", __func__);
+		return -EPERM;
+	}
 	spin_lock_irqsave(&cec_ctrl->lock, flags);
 	ret = snprintf(buf, PAGE_SIZE, "%d\n",
 		cec_ctrl->compliance_response_enabled);
@@ -735,6 +749,11 @@ static ssize_t hdmi_wta_cec_msg(struct device *dev,
 		return -EPERM;
 	}
 
+	rc =  hdmi_tx_is_HDMI_panel_power_on(dev);
+	if (rc <= 0) {
+		DEV_ERR("%s: HDMI clock is not enable\n", __func__);
+		return -EPERM;
+	}
 	spin_lock_irqsave(&cec_ctrl->lock, flags);
 	if (cec_ctrl->compliance_response_enabled) {
 		spin_unlock_irqrestore(&cec_ctrl->lock, flags);

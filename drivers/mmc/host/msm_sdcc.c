@@ -4,7 +4,7 @@
  *  Copyright (C) 2007 Google Inc,
  *  Copyright (C) 2003 Deep Blue Solutions, Ltd, All Rights Reserved.
  *  Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
- *  Copyright (C) 2013 Sony Mobile Communications AB.
+ *  Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  *
  * This program is free software; you can redistribute it and/or modify
@@ -61,6 +61,8 @@
 #include <mach/mpm.h>
 #include <mach/msm_bus.h>
 
+#include <mach/board-sony_shinano-wifi.h>
+
 #include "msm_sdcc.h"
 #include "msm_sdcc_dml.h"
 
@@ -81,8 +83,6 @@
 #define INVALID_TUNING_PHASE		-1
 
 #define MSM_SDCC_PM_QOS_TIMEOUT		10000 /* usecs */
-
-#define MMC_SDCC3_SLOT_NUMBER		3
 
 #if defined(CONFIG_DEBUG_FS)
 static void msmsdcc_dbg_createhost(struct msmsdcc_host *);
@@ -528,6 +528,11 @@ msmsdcc_request_end(struct msmsdcc_host *host, struct mmc_request *mrq)
 	/* Clear current request information as current request has ended */
 	memset(&host->curr, 0, sizeof(struct msmsdcc_curr_req));
 
+	if (host->disable_mciclk_pwrsave) {
+		host->disable_mciclk_pwrsave = 0;
+		msmsdcc_set_pwrsave(host->mmc, 1);
+	}
+
 	/*
 	 * Need to drop the host lock here; mmc_request_done may call
 	 * back into the driver...
@@ -700,6 +705,11 @@ msmsdcc_dma_complete_tlet(unsigned long data)
 			memset(&host->curr, 0, sizeof(struct msmsdcc_curr_req));
 			spin_unlock_irqrestore(&host->lock, flags);
 
+			if (host->disable_mciclk_pwrsave) {
+				host->disable_mciclk_pwrsave = 0;
+				msmsdcc_set_pwrsave(host->mmc, 1);
+			}
+
 			mmc_request_done(host->mmc, mrq);
 			return;
 		} else if (mrq->data->stop && ((mrq->sbc && mrq->data->error)
@@ -854,6 +864,11 @@ static void msmsdcc_sps_complete_tlet(unsigned long data)
 			 */
 			memset(&host->curr, 0, sizeof(struct msmsdcc_curr_req));
 			spin_unlock_irqrestore(&host->lock, flags);
+
+			if (host->disable_mciclk_pwrsave) {
+				host->disable_mciclk_pwrsave = 0;
+				msmsdcc_set_pwrsave(host->mmc, 1);
+			}
 
 			mmc_request_done(host->mmc, mrq);
 			return;
@@ -1470,6 +1485,11 @@ msmsdcc_data_err(struct msmsdcc_host *host, struct mmc_data *data,
 	/* Dummy CMD52 is not needed when CMD53 has errors */
 	if (host->dummy_52_needed)
 		host->dummy_52_needed = 0;
+
+	if (host->disable_mciclk_pwrsave) {
+		host->disable_mciclk_pwrsave = 0;
+		msmsdcc_set_pwrsave(host->mmc, 1);
+	}
 }
 
 static int
@@ -2323,6 +2343,12 @@ msmsdcc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 			host->curr.use_wr_data_pend = true;
 	}
 
+	if (mrq->cmd->opcode == SD_IO_RW_EXTENDED &&
+		host->plat->use_for_wifi) {
+		host->disable_mciclk_pwrsave = 1;
+		msmsdcc_set_pwrsave(host->mmc, 0);
+	}
+
 	msmsdcc_request_start(host, mrq);
 	spin_unlock_irqrestore(&host->lock, flags);
 	return;
@@ -2334,6 +2360,10 @@ card_ejected:
 	if (mrq->data) {
 		mrq->data->error = -error;
 		mrq->data->bytes_xfered = 0;
+	}
+	if (host->disable_mciclk_pwrsave) {
+		host->disable_mciclk_pwrsave = 0;
+		msmsdcc_set_pwrsave(host->mmc, 1);
 	}
 	mmc_request_done(mmc, mrq);
 }
@@ -5849,7 +5879,8 @@ static struct mmc_platform_data *msmsdcc_populate_pdata(struct device *dev)
 		pdata->disable_cmd23 = true;
 	of_property_read_u32(np, "qcom,dat1-mpm-int",
 					&pdata->mpm_sdiowakeup_int);
-
+	if (of_get_property(np, "somc,use-for-wifi", NULL))
+		pdata->use_for_wifi = true;
 	return pdata;
 err:
 	return NULL;
@@ -5870,20 +5901,11 @@ msmsdcc_probe(struct platform_device *pdev)
 	struct resource *dmares = NULL;
 	struct resource *dma_crci_res = NULL;
 	int ret = 0;
-	struct mmc_platform_data *plat_data = NULL;
 
 	if (pdev->dev.of_node) {
 		plat = msmsdcc_populate_pdata(&pdev->dev);
 		of_property_read_u32((&pdev->dev)->of_node,
 				"cell-index", &pdev->id);
-		plat_data = pdev->dev.platform_data;
-		if (plat && plat_data) {
-			if (plat_data->status)
-				plat->status = plat_data->status;
-			if (plat_data->register_status_notify)
-				plat->register_status_notify =
-					plat_data->register_status_notify;
-		}
 	} else {
 		plat = pdev->dev.platform_data;
 	}
@@ -6163,11 +6185,9 @@ msmsdcc_probe(struct platform_device *pdev)
 	if (plat->is_sdio_al_client)
 		mmc->pm_flags |= MMC_PM_IGNORE_PM_NOTIFY;
 
-	/*
-	 * Use "id" parameter to determine whether the mmc slot is used by WiFi.
-	 * MMC_SDCC3_SLOT_NUMBER is used bi WiFi.
-	 */
-	if (pdev->id == MMC_SDCC3_SLOT_NUMBER) {
+	if (plat->use_for_wifi) {
+		plat->register_status_notify = shinano_wifi_status_register;
+		plat->status = shinano_wifi_status;
 		mmc->pm_caps |= MMC_PM_IGNORE_PM_NOTIFY;
 		mmc->pm_flags |= mmc->pm_caps;
 	}
@@ -6757,7 +6777,7 @@ msmsdcc_runtime_suspend(struct device *dev)
 		if (unlikely(work_busy(&mmc->detect.work))) {
 			rc = -EAGAIN;
 		} else {
-			if (host->pdev->id == MMC_SDCC3_SLOT_NUMBER)
+			if (host->plat->use_for_wifi)
 				mmc->pm_flags |= MMC_PM_KEEP_POWER;
 			rc = mmc_suspend_host(mmc);
 		}

@@ -1,4 +1,5 @@
 /* Copyright (c) 2010-2011, 2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -52,6 +53,7 @@ struct msm_rpm_log_buffer {
 	char *data;
 	u32 len;
 	u32 pos;
+	struct mutex mutex;
 	u32 max_len;
 	u32 read_idx;
 	struct msm_rpm_log_platform_data *pdata;
@@ -218,6 +220,7 @@ static ssize_t msm_rpm_log_file_read(struct file *file, char __user *bufu,
 	if (!access_ok(VERIFY_WRITE, bufu, count))
 		return -EFAULT;
 
+	mutex_lock(&buf->mutex);
 	/* check for more messages if local buffer empty */
 	if (buf->pos == buf->len) {
 		buf->pos = 0;
@@ -225,8 +228,10 @@ static ssize_t msm_rpm_log_file_read(struct file *file, char __user *bufu,
 						&(buf->read_idx));
 	}
 
-	if ((file->f_flags & O_NONBLOCK) && buf->len == 0)
+	if ((file->f_flags & O_NONBLOCK) && buf->len == 0) {
+		mutex_unlock(&buf->mutex);
 		return -EAGAIN;
+	}
 
 	/* loop until new messages arrive */
 	while (buf->len == 0) {
@@ -241,6 +246,7 @@ static ssize_t msm_rpm_log_file_read(struct file *file, char __user *bufu,
 
 	remaining = __copy_to_user(bufu, &(buf->data[buf->pos]), out_len);
 	buf->pos += out_len - remaining;
+	mutex_unlock(&buf->mutex);
 
 	return out_len - remaining;
 }
@@ -287,6 +293,7 @@ static int msm_rpm_log_file_open(struct inode *inode, struct file *file)
 	buf->pdata = pdata;
 	buf->len = 0;
 	buf->pos = 0;
+	mutex_init(&buf->mutex);
 	buf->max_len = PRINTED_LENGTH(pdata->log_len);
 	buf->read_idx = msm_rpm_log_read(pdata, MSM_RPM_LOG_PAGE_INDICES,
 					 MSM_RPM_LOG_HEAD);
