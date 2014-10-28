@@ -340,7 +340,6 @@ config ARCH_FSM9900
 	select MSM_GPIOMUX
 	select MULTI_IRQ_HANDLER
 	select PM_DEVFREQ
-	select MSM_DEVFREQ_CPUBW
 	select MSM_PIL
 	select MSM_NATIVE_RESTART
 	select MSM_RESTART_V2
@@ -1149,15 +1148,6 @@ config MACH_SONY_SIRIUS
 	  If you enable this config,
 	  Please use SONY Mobile source tree.
 
-config MACH_SONY_SIRIUS_BRAZIL
-	depends on ARCH_MSM8974
-	bool "Sony Mobile Sirius Brazil"
-	help
-	  Support for the SONY Mobile Sirius Brazil device.
-	  It is based on QCOM MSM8974 AB chipset.
-	  If you enable this config,
-	  Please use SONY Mobile source tree.
-
 config MACH_SONY_CASTOR
 	depends on ARCH_MSM8974
 	bool "Sony Mobile Castor"
@@ -1185,12 +1175,39 @@ config MACH_SONY_CASTOR_WINDY
 	  If you enable this config,
 	  Please use SONY Mobile source tree.
 
-config MACH_SONY_CANOPUS
+config MACH_SONY_LEO
 	depends on ARCH_MSM8974
-	bool "Sony Mobile Canopus"
+	bool "Sony Mobile Leo"
 	help
-	  Support for the SONY Mobile Canopus device.
-	  It is based on QCOM MSM8974 AB chipset.
+	  Support for the SONY Mobile Leo device.
+	  It is based on QCOM MSM8974 AC chipset.
+	  If you enable this config,
+	  Please use SONY Mobile source tree.
+
+config MACH_SONY_ARIES
+	depends on ARCH_MSM8974
+	bool "Sony Mobile Aries"
+	help
+	  Support for the SONY Mobile Aries device.
+	  It is based on QCOM MSM8974 AC chipset.
+	  If you enable this config,
+	  Please use SONY Mobile source tree.
+
+config MACH_SONY_SCORPION
+	depends on ARCH_MSM8974
+	bool "Sony Mobile Scorpion"
+	help
+	  Support for the SONY Mobile Scorpion device.
+	  It is based on QCOM MSM8974 AC chipset.
+	  If you enable this config,
+	  Please use SONY Mobile source tree.
+
+config MACH_SONY_SCORPION_WINDY
+	depends on ARCH_MSM8974
+	bool "Sony Mobile Scorpion Windy"
+	help
+	  Support for the SONY Mobile Scorpion Windy device.
+	  It is based on QCOM APQ8074 AC chipset.
 	  If you enable this config,
 	  Please use SONY Mobile source tree.
 
@@ -1892,22 +1909,6 @@ config MSM_RPCSERVER_HANDSET
 	help
 	  Support for receiving handset events like headset detect,
 	  headset switch and clamshell state.
-
-config MSM_RMT_STORAGE_CLIENT
-	depends on (ARCH_MSM && MSM_ONCRPCROUTER)
-	default n
-	bool "Remote Storage RPC client"
-	help
-	  Provide RPC mechanism for remote processors to access storage
-	  device on apps processor.
-
-config MSM_RMT_STORAGE_CLIENT_STATS
-	depends on (MSM_RMT_STORAGE_CLIENT && DEBUG_FS)
-	default n
-	bool "Remote storage RPC client performance statistics"
-	help
-	  Collects performance statistics and shows this information
-	  through a debugfs file rmt_storage_stats.
 
 config MSM_DALRPC
 	bool "DAL RPC support"
@@ -3069,6 +3070,13 @@ config MSM_UARTDM_Core_v14
 	depends on SERIAL_MSM_HS
 	help
 		Select if BLSP based UART Core v.14 or higher is present.
+
+config MSM_COMMON_LOG
+	bool "Use to export symbols for parsing memory dump"
+	help
+	 Use this to export symbols to a memory dump table. This table
+	 can be used by post analysis tools to extract information from
+	 memory when device crashes.
 
 config MSM_BOOT_STATS
 	bool "Use MSM boot stats reporting"

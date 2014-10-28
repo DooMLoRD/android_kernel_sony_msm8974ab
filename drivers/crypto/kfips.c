@@ -26,6 +26,7 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/ctype.h>
 #include <linux/errno.h>
 #include <linux/proc_fs.h>
 #include <linux/fs.h>
@@ -42,12 +43,7 @@
 #include <linux/init.h>
 #include <asm/div64.h>
 #include <crypto/scatterwalk.h>
-
-#define KEY_ID_SIZE 4
-
 #include "kfips.h"
-
-#define debugf pr_debug
 
 /* Optional support for load balancing CPUs during run-time. */
 #define KFIPS_CPU_BALANCE
@@ -56,43 +52,16 @@
 #define KFIPS_PROC_STATUS_NAME KFIPS_PROC_NAME "_status"
 #endif /* KFIPS_PROC_STATUS */
 
-/* assert macro. */
-#define assert(C) \
-	do {								\
-		if (C) {						\
-			/* nop. */					\
-		} else {						\
-			pr_err("ASSERT(%s:%d)\n", __FILE__, __LINE__);	\
-		}							\
-	} while (0)
-
 /* Module parameters no g_ prefix as it would look ugly externally. */
 
 /* Uid of the user that the /proc/ device is given to. */
 static int uid = 1000;
 
-/* Macros for processing with current worker or all workers. */
-#define KFIPSWID unsigned int
+/* Maximum amount of workers defaults to 1 (but usually the value should
+   be provided by kfips.h). */
 #ifndef KFIPS_MAX_WORKERS
 #define KFIPS_MAX_WORKERS 1
 #endif /* KFIPS_MAX_WORKERS */
-#define PER_WORKER(x) x##__perworker[KFIPS_MAX_WORKERS]
-#define THIS_WORKER(x) x##__perworker[current_worker]
-#define SET_WORKER(x, y) (x##__perworker[current_worker] = y)
-
-#define ALL_WORKERS_BLOCK(current_worker)				\
-	for (current_worker = 0; current_worker < KFIPS_MAX_WORKERS;	\
-	     current_worker++)
-
-#define ALL_WORKERS(statement)						\
-	do {								\
-		KFIPSWID current_worker;				\
-		for (current_worker = 0; current_worker < KFIPS_MAX_WORKERS; \
-		     current_worker++) {				\
-			statement;					\
-		}							\
-	} while (0)
-#define FILP_TO_WORKER(filp) ((KFIPSWID) (filp->private_data))
 
 /*
     Defaults for hammerhead (Nexus 5) [MSM8974].
@@ -106,31 +75,31 @@ static int uid = 1000;
     have multiple times slower "write speed", with some improvement in
     "read speed".
  */
-#ifdef CONFIG_ARCH_MSM8974
+#ifdef CONFIG_ARCH_MSM8974_NEXUS5_MATRIXDAR111
 #if KFIPS_MAX_WORKERS >= 4
 #ifndef KFIPS_BUSYCOUNT_DEFAULT
 #define KFIPS_BUSYCOUNT_DEFAULT { 0, 0, 0, 0 }
 #endif /* KFIPS_BUSYCOUNT_DEFAULT */
 #ifndef KFIPS_CPU_BALANCE_FLAG_DEFAULT
-#define KFIPS_CPU_BALANCE_FLAG_DEFAULT { 0, 0, 0, 0 }
+#define KFIPS_CPU_BALANCE_FLAG_DEFAULT { 1, 1, 1, 1 }
 #endif /* KFIPS_CPU_BALANCE_FLAG_DEFAULT */
 #ifndef KFIPS_CPU_BALANCE_AFFINITY_DEFAULT
-#define KFIPS_CPU_BALANCE_AFFINITY_DEFAULT { 0, 0, 0, 0 }
+#define KFIPS_CPU_BALANCE_AFFINITY_DEFAULT { 2, 4, 8, 1 }
 #endif /* KFIPS_CPU_BALANCE_AFFINITY_DEFAULT */
 #ifndef KFIPS_PENDING_MAX_DEFAULT
-#define KFIPS_PENDING_MAX_DEFAULT 128
+#define KFIPS_PENDING_MAX_DEFAULT 200000
 #endif /* KFIPS_PENDING_MAX_DEFAULT */
 #ifndef KFIPS_PENDING_HIGH_DEFAULT
-#define KFIPS_PENDING_HIGH_DEFAULT 64
+#define KFIPS_PENDING_HIGH_DEFAULT 190000
 #endif /* KFIPS_PENDING_MAX_DEFAULT */
 #ifndef KFIPS_PENDING_LOW_DEFAULT
-#define KFIPS_PENDING_LOW_DEFAULT 0
+#define KFIPS_PENDING_LOW_DEFAULT 102400
 #endif /* KFIPS_PENDING_LOW_DEFAULT */
 #ifndef KFIPS_CPU_MAX_DEFAULT
-#define KFIPS_CPU_MAX_DEFAULT 4
+#define KFIPS_CPU_MAX_DEFAULT 3
 #endif /* KFIPS_CPU_MAX_DEFAULT */
 #endif /* KFIPS_MAX_WORKERS */
-#endif /* CONFIG_ARCH_MSM8974 */
+#endif /* CONFIG_ARCH_MSM8974_NEXUS5_MATRIXDAR111 */
 
 /* Default values for configuration settings (generic).
    The default settings allow a large number of threads to process the
@@ -250,11 +219,11 @@ static int g_cpu_max = KFIPS_CPU_MAX_DEFAULT;
 static const int g_cpu_max_default = KFIPS_CPU_MAX_DEFAULT;
 
 #ifdef KFIPS_PROC_STATUS
-static pid_t PER_WORKER(g_pid);
-static unsigned long long PER_WORKER(g_requests);
-static unsigned long long PER_WORKER(g_encrypt_bytes);
-static unsigned long long PER_WORKER(g_decrypt_bytes);
-static unsigned long long PER_WORKER(g_wakeup);
+static pid_t g_pid_perworker[KFIPS_MAX_WORKERS];
+static unsigned long long g_requests_perworker[KFIPS_MAX_WORKERS];
+static unsigned long long g_encrypt_bytes_perworker[KFIPS_MAX_WORKERS];
+static unsigned long long g_decrypt_bytes_perworker[KFIPS_MAX_WORKERS];
+static unsigned long long g_wakeup_perworker[KFIPS_MAX_WORKERS];
 #endif /* KFIPS_PROC_STATUS */
 
 /* Get number of pages within scatterlist that are needed to store
@@ -299,7 +268,7 @@ static __must_check int sg_copy_from_user_buffer(
 		src += len;
 	}
 	/* If the provided buffer is proper all bytes are copied. */
-	assert(nbytes == 0);
+	BUG_ON(nbytes != 0);
 error_sg_copy_from_user_buffer:
 	sg_miter_stop(&miter);
 	return ret;
@@ -328,7 +297,7 @@ static __must_check int sg_copy_to_user_buffer(
 		dst += len;
 	}
 	/* If the provided buffer is proper all bytes are copied. */
-	assert(nbytes == 0);
+	BUG_ON(nbytes != 0);
  error_sg_copy_to_user_buffer:
 	sg_miter_stop(&miter);
 	return ret;
@@ -338,7 +307,7 @@ static __must_check int sg_copy_to_user_buffer(
 /* Cause workers to balance themselves appropriately to the available
    CPU cores. In case of 2 workers, balance on two CPU sets which are
    exact xor of each other. */
-static void cpu_balance2(struct task_struct *task, KFIPSWID worker_id)
+static void cpu_balance2(struct task_struct *task, unsigned int worker_id)
 {
 	const unsigned long cpumasks[2] = { 0x55555555UL, 0xAAAAAAAAUL };
 	struct cpumask cpumask = { CPU_BITS_NONE };
@@ -361,7 +330,7 @@ static void cpu_balance2(struct task_struct *task, KFIPSWID worker_id)
 
 /* Cause workers to balance themselves appropriately to the available
    CPU cores. */
-static void cpu_balance(struct task_struct *task, KFIPSWID worker_id)
+static void cpu_balance(struct task_struct *task, unsigned int worker_id)
 {
 	struct cpumask cpumask = { CPU_BITS_NONE };
 	int ret;
@@ -370,7 +339,7 @@ static void cpu_balance(struct task_struct *task, KFIPSWID worker_id)
 	if (g_cpu_balance_affinity[worker_id]) {
 		/* There is a specific affinity requested to use. */
 		memcpy(&cpumask, &g_cpu_balance_affinity[worker_id],
-		       sizeof g_cpu_balance_affinity[worker_id]);
+		       sizeof(g_cpu_balance_affinity[worker_id]));
 
 		if (cpumask_equal(&task->cpus_allowed, &cpumask)) {
 			/* The mask is already correct, no need to balance. */
@@ -432,7 +401,7 @@ static const struct file_operations file_fops = {
    queues. */
 static int file_open(struct inode *inode, struct file *filp)
 {
-	KFIPSWID current_worker;
+	unsigned int current_worker;
 
 	spin_lock_bh(&g_kfips_lock);
 	current_worker = g_num_queues;
@@ -448,7 +417,7 @@ static int file_open(struct inode *inode, struct file *filp)
 	spin_unlock_bh(&g_kfips_lock);
 	filp->private_data = (void *)current_worker;
 #ifdef KFIPS_PROC_STATUS
-	SET_WORKER(g_pid, current->pid);
+	g_pid_perworker[current_worker] = current->pid;
 #endif
 	pr_info("Process %d connected - %d queues available\n",
 		current->pid, g_num_queues);
@@ -463,7 +432,7 @@ static int file_mmap(struct file *filp, struct vm_area_struct *vma)
 
 /* Get 0...num_req requests for specific worker. */
 static uint32_t get_reqs(struct kfips_request_context *reqs[],
-			 KFIPSWID current_worker,
+			 unsigned int current_worker,
 			 uint32_t num_req,
 			 size_t   szleft)
 {
@@ -473,8 +442,8 @@ static uint32_t get_reqs(struct kfips_request_context *reqs[],
 		struct kfips_request_context *req;
 		req = (struct kfips_request_context *)g_pending.next;
 		if (!req || !req->req || req->req->nbytes > szleft) {
-			debugf("Buffer full at %dth data request",
-			       (int) count);
+			pr_debug("Buffer full at %dth data request",
+				 (int) count);
 			break;
 		}
 		list_del(&req->list);
@@ -552,7 +521,7 @@ static uint32_t transfer_user_req(uint32_t flags,
 /* Copy the results and acknowledge that the requests have been handled. */
 static int transfer_user_replies(struct kfips_req __user *reqs,
 				 unsigned char __user *data_p,
-				 KFIPSWID current_worker,
+				 unsigned int current_worker,
 				 uint32_t num_req)
 {
 	uint32_t blank = KFIPS_FLAGS_BLANK;
@@ -562,28 +531,28 @@ static int transfer_user_replies(struct kfips_req __user *reqs,
 	for (i = 0; i < num_req; i++) {
 		uint32_t flags;
 		__get_user(flags, &reqs->flags);
-		debugf("Check flags (%d): %x\n", i, flags);
+		pr_debug("Check flags (%d): %x\n", i, flags);
 		if ((flags & (KFIPS_FLAGS_SEND | KFIPS_FLAGS_ERR)) != 0) {
 			uint32_t context;
 			struct kfips_request_context *rctx;
 			__get_user(context, &reqs->context);
 
-			debugf("Processing from user (%d): wrk: %d ctx: %u\n",
-			       i, (int)current_worker,
-			       (unsigned int) context);
+			pr_debug("Processing from user (%d): wrk: %d ctx: %u\n",
+				 i, (int)current_worker,
+				 (unsigned int) context);
 
 			rctx = g_inplay[current_worker][context &
 							KFIPS_RING_INDEX_MASK];
 			if (!rctx) {
-				debugf("unable to get rctx: (%u, %u) (idx=%d)",
-				       (unsigned int) current_worker,
-				       (unsigned int) context, (int) i);
+				pr_debug("unable to get rctx: (%u,%u) (idx=%d)",
+					 (unsigned int) current_worker,
+					 (unsigned int) context, (int) i);
 				return -EFAULT;
 			}
 			g_inplay[current_worker][context &
 						 KFIPS_RING_INDEX_MASK] = NULL;
-			debugf("rctx: %p req: %p from data = %p\n",
-			       rctx, rctx->req, data_p);
+			pr_debug("rctx: %p req: %p from data = %p\n",
+				 rctx, rctx->req, data_p);
 			data_p += transfer_user_reply(flags, context, rctx,
 						      data_p);
 			__put_user(blank, &reqs->flags);
@@ -597,7 +566,7 @@ static int transfer_user_replies(struct kfips_req __user *reqs,
 static int transfer_reqs(struct kfips_req __user *reqs,
 			 unsigned char __user *datap,
 			 struct kfips_request_context **rctxs,
-			 KFIPSWID current_worker,
+			 unsigned int current_worker,
 			 uint32_t num_req)
 {
 	int ret = 0;
@@ -605,13 +574,13 @@ static int transfer_reqs(struct kfips_req __user *reqs,
 
 #ifdef KFIPS_PROC_STATUS
 	/* Increment only once per vector of requests. */
-	SET_WORKER(g_requests, THIS_WORKER(g_requests+1));
+	g_requests_perworker[current_worker] += 1;
 #endif /* KFIPS_PROC_STATUS */
 
 	for (i = 0; i < num_req; i++) {
 		uint32_t flags;
 		__get_user(flags, &reqs->flags);
-		debugf("Sending req (%d) to userspace\n", i);
+		pr_debug("Sending req (%d) to userspace\n", i);
 		if ((flags & (KFIPS_FLAGS_BLANK)) != 0) {
 			uint32_t context;
 			uint32_t kl;
@@ -620,8 +589,8 @@ static int transfer_reqs(struct kfips_req __user *reqs,
 			if (g_inplay[current_worker][i])
 				return -EFAULT;
 
-			debugf("Memorize inplay(%d, %d) = %p\n",
-			       current_worker, i, *rctxs);
+			pr_debug("Memorize inplay(%d, %d) = %p\n",
+				 current_worker, i, *rctxs);
 			g_inplay[current_worker][i] = *rctxs;
 			flags = (*rctxs)->flags;
 
@@ -659,13 +628,13 @@ static int transfer_reqs(struct kfips_req __user *reqs,
 				datap += (*rctxs)->req->nbytes;
 #ifdef KFIPS_PROC_STATUS
 				if ((flags & KFIPS_FLAGS_ENCRYPT) != 0)
-					SET_WORKER(g_encrypt_bytes,
-						THIS_WORKER(g_encrypt_bytes)
-						+(*rctxs)->req->nbytes);
+					g_encrypt_bytes_perworker[
+						current_worker] +=
+						(*rctxs)->req->nbytes;
 				if ((flags & KFIPS_FLAGS_DECRYPT) != 0)
-					SET_WORKER(g_decrypt_bytes,
-						THIS_WORKER(g_decrypt_bytes)
-						+(*rctxs)->req->nbytes);
+					g_decrypt_bytes_perworker[
+						current_worker] +=
+						(*rctxs)->req->nbytes;
 #endif /* KFIPS_PROC_STATUS */
 			}
 		}
@@ -673,22 +642,22 @@ static int transfer_reqs(struct kfips_req __user *reqs,
 		rctxs += 1;
 	}
 	if (num_req == 0)
-		debugf("Sending no reqs to userspace\n");
+		pr_debug("Sending no reqs to userspace\n");
 	return ret;
 }
 
 #ifdef KFIPS_PROC_STATUS
 /* Count process/thread wakeups for statistics. */
-static inline int kfips_wakeup_count(KFIPSWID current_worker)
+static inline int kfips_wakeup_count(unsigned int current_worker)
 {
-	SET_WORKER(g_wakeup, THIS_WORKER(g_wakeup)+1);
+	g_wakeup_perworker[current_worker]++;
 	return 1;
 }
 #endif /* KFIPS_PROC_STATUS */
 /* Optionally set requestor to long sleep.
    The intent is to keep only as many workers active as there are
    online processing units. */
-static int long_sleep(KFIPSWID current_worker)
+static int long_sleep(unsigned int current_worker)
 {
 	int ret = 0;
 	if (current_worker == 0)
@@ -721,7 +690,7 @@ static long file_ioctl(struct file *filp,
 		       unsigned long arg)
 {
 	uint32_t blank = KFIPS_FLAGS_BLANK;
-	KFIPSWID current_worker = FILP_TO_WORKER(filp);
+	unsigned int current_worker = ((unsigned int) (filp->private_data));
 	int ret = 0;
 	uint32_t iosize = ((cmd >> _IOC_SIZESHIFT) & _IOC_SIZEMASK);
 	uint32_t num_req = KFIPS_RING_ENTRIES_SAFE;
@@ -730,17 +699,17 @@ static long file_ioctl(struct file *filp,
 	unsigned char __user *datap = (void __user *)(&userp->data);
 	struct kfips_request_context *reqs[KFIPS_RING_ENTRIES];
 
-	assert(current_worker != ((KFIPSWID)-1));
+	BUG_ON(current_worker == ((unsigned int)-1));
 
 	if (num_req == 0)
 		return 0; /* Allow zero length request. */
 
-	debugf("IOCTL Req: cmd = %x, expect = %x sz: %zd/%zd <%zd : %zd >\n",
-	       cmd,
-	       KFIPS_QUEUE_IOCTL(struct userspace_req),
-	       sizeof(struct kfips_req), sizeof(struct userspace_req),
-	       sizeof(struct userspace_req) / sizeof(struct kfips_req),
-	       sizeof(struct userspace_req) % sizeof(struct kfips_req));
+	pr_debug("IOCTL Req: cmd = %x, expect = %x sz: %zd/%zd <%zd : %zd >\n",
+		 cmd,
+		 KFIPS_QUEUE_IOCTL(struct userspace_req),
+		 sizeof(struct kfips_req), sizeof(struct userspace_req),
+		 sizeof(struct userspace_req) / sizeof(struct kfips_req),
+		 sizeof(struct userspace_req) % sizeof(struct kfips_req));
 
 	if (cmd == KFIPS_QUEUE_IOCTL(struct userspace_req)) {
 		/* Verify read-write access to entire area */
@@ -748,7 +717,7 @@ static long file_ioctl(struct file *filp,
 		    !access_ok(VERIFY_READ, userp, iosize))
 			return -EFAULT;
 
-		debugf("IOCTL Req: valid\n");
+		pr_debug("IOCTL Req: valid\n");
 
 		/* Send packets forwards. */
 		ret = transfer_user_replies(userp->reqs, datap,
@@ -813,7 +782,7 @@ static long file_ioctl(struct file *filp,
 			num_reqo = get_reqs(reqs, current_worker, num_req,
 					    KFIPS_DATA_SIZE);
 		}
-		debugf("Woken up with %d reqs to handle.\n", num_reqo);
+		pr_debug("Woken up with %d reqs to handle.\n", num_reqo);
 
 		/* Fill-in the first 'num_reqo' entries. */
 		ret = transfer_reqs(userp->reqs, datap, reqs, current_worker,
@@ -832,7 +801,7 @@ static long file_ioctl(struct file *filp,
 	/* If neccessary, assign the process to a specific cpu. */
 	if (g_cpu_balance_flag[current_worker])
 		cpu_balance(get_current(),
-			    (KFIPSWID) (unsigned long) filp->private_data);
+			    (unsigned int) (unsigned long) filp->private_data);
 #endif /* KFIPS_CPU_BALANCE */
 
 	return ret;
@@ -856,11 +825,11 @@ static ssize_t file_write(struct file *filp, const char *buf, size_t count,
 static int file_release(struct inode *inode, struct file *filp)
 {
 	int i;
-	KFIPSWID current_worker = (KFIPSWID) (filp->private_data);
-	assert(current_worker < KFIPS_MAX_WORKERS);
+	unsigned int current_worker = (unsigned int) (filp->private_data);
+	BUG_ON(current_worker >= KFIPS_MAX_WORKERS);
 	pr_info("Process %d disconnected\n", current->pid);
 #ifdef KFIPS_PROC_STATUS
-	SET_WORKER(g_pid, 0);
+	g_pid_perworker[current_worker] = 0;
 #endif
 
 	/* Respond all remaining entries in "inplay". */
@@ -961,13 +930,13 @@ static int kfips_aes_setkey(struct crypto_ablkcipher *tfm, const u8 *key,
 	struct kfips_transform_context *ctx = crypto_ablkcipher_ctx(tfm);
 
 	if (alg->max_keysize == AES_MAX_KEY_SIZE) {
-		if (keylen != KEY_ID_SIZE &&
+		if (keylen != KFIPS_KEY_ID_SIZE &&
 		    keylen != AES_KEYSIZE_128 &&
 		    keylen != AES_KEYSIZE_192 &&
 		    keylen != AES_KEYSIZE_256)
 			return -EINVAL;
 	} else if (alg->max_keysize == AES_MAX_KEY_SIZE * 2) {
-		if (keylen != KEY_ID_SIZE &&
+		if (keylen != KFIPS_KEY_ID_SIZE &&
 		    keylen != AES_KEYSIZE_128 * 2 &&
 		    keylen != AES_KEYSIZE_256 * 2)
 			return -EINVAL;
@@ -1084,7 +1053,7 @@ static struct crypto_alg algs[] = {
 		.cra_init = kfips_aes_cra_init,
 		.cra_exit = kfips_aes_cra_exit,
 		.cra_u.ablkcipher = {
-			.min_keysize = KEY_ID_SIZE,
+			.min_keysize = KFIPS_KEY_ID_SIZE,
 			.max_keysize = AES_MAX_KEY_SIZE * 2,
 			.ivsize = AES_BLOCK_SIZE,
 			.setkey = kfips_aes_setkey,
@@ -1105,13 +1074,13 @@ static void kfips_aes_mod_unload(enum kfips_load_state mstate)
 {
 	int i;
 
-	pr_alert("Unloading kfips from state %d\n", mstate);
+	pr_debug("Unloading kfips from state %d\n", mstate);
 
 	switch (mstate) {
 	case KFIPS_STATE_LOADED:
 		remove_proc_entry(KFIPS_PROC_NAME, NULL);
 	case KFIPS_STATE_CRYPTO_REGISTERED:
-		for (i = 0; i < sizeof algs / sizeof algs[0]; i++)
+		for (i = 0; i < sizeof(algs) / sizeof(algs[0]); i++)
 			crypto_unregister_alg(&algs[i]);
 	case KFIPS_STATE_NOTLOADED:
 		break;
@@ -1136,6 +1105,7 @@ static int kfips_proc_status_read(char *buf,
 {
 	int len = 0;
 	unsigned l_count;
+	unsigned int current_worker;
 
 	if (off > 0) {
 		*eof = 1;
@@ -1159,67 +1129,50 @@ static int kfips_proc_status_read(char *buf,
 	/* Add per worker information. */
 
 	len += snprintf(buf + len, PAGE_SIZE - len, "Pid : ");
-	{
-		KFIPSWID current_worker;
-		ALL_WORKERS_BLOCK(current_worker)
-		{
-			len += snprintf(buf + len, PAGE_SIZE - len, " %u",
-					(unsigned int) THIS_WORKER(g_pid));
-		}
-	}
+	for (current_worker = 0; current_worker < KFIPS_MAX_WORKERS;
+	     current_worker++)
+		len += snprintf(buf + len, PAGE_SIZE - len, " %u",
+				(unsigned int) g_pid_perworker[
+					current_worker]);
 	len += snprintf(buf + len, PAGE_SIZE - len, "\n");
 
 	len += snprintf(buf + len, PAGE_SIZE - len, "Inplay : ");
-
-	{
-		KFIPSWID current_worker;
-		ALL_WORKERS_BLOCK(current_worker)
-		{
-			int c;
-			l_count = 0;
-			for (c = 0; c < KFIPS_RING_ENTRIES; c++)
-				if (g_inplay[current_worker][c])
-					l_count++;
-			len += snprintf(buf + len, PAGE_SIZE - len, " %u",
-					l_count);
-		}
+	for (current_worker = 0; current_worker < KFIPS_MAX_WORKERS;
+	     current_worker++) {
+		int c;
+		l_count = 0;
+		for (c = 0; c < KFIPS_RING_ENTRIES; c++)
+			if (g_inplay[current_worker][c])
+				l_count++;
+		len += snprintf(buf + len, PAGE_SIZE - len, " %u", l_count);
 	}
-
 	len += snprintf(buf + len, PAGE_SIZE - len, "\n");
 
 	len += snprintf(buf + len, PAGE_SIZE - len, "Pending len : ");
-	{
-		l_count = (unsigned int) g_pending_len;
-		len += snprintf(buf + len, PAGE_SIZE - len, " %u/%d",
-				l_count, g_pending_max);
-	}
+	len += snprintf(buf + len, PAGE_SIZE - len, " %u/%d",
+			(unsigned int)g_pending_len, g_pending_max);
 	len += snprintf(buf + len, PAGE_SIZE - len, "\n");
 
-	{
-		KFIPSWID current_worker;
-		ALL_WORKERS_BLOCK(current_worker)
-		{
-			spin_lock_bh(&g_lock);
-			len += snprintf(buf + len, PAGE_SIZE - len,
-					"Worker #%d: Wakeups: %llu\n",
-				       (int) current_worker,
-					THIS_WORKER(g_wakeup));
-			len += snprintf(
-				buf + len, PAGE_SIZE - len,
+	for (current_worker = 0; current_worker < KFIPS_MAX_WORKERS;
+	     current_worker++) {
+		spin_lock_bh(&g_lock);
+		len += snprintf(buf + len, PAGE_SIZE - len,
+				"Worker #%d: Wakeups: %llu\n",
+				(int) current_worker,
+				g_wakeup_perworker[current_worker]);
+		len += snprintf(buf + len, PAGE_SIZE - len,
 				"Worker #%d: Total system calls: %llu\n",
-				(int) current_worker, THIS_WORKER(g_requests));
-			len += snprintf(
-				buf + len, PAGE_SIZE - len,
+				(int) current_worker,
+				g_requests_perworker[current_worker]);
+		len += snprintf(buf + len, PAGE_SIZE - len,
 				"Worker #%d: Total encrypted bytes: %llu\n",
 				(int) current_worker,
-				THIS_WORKER(g_encrypt_bytes));
-			len += snprintf(
-				buf + len, PAGE_SIZE - len,
+				g_encrypt_bytes_perworker[current_worker]);
+		len += snprintf(buf + len, PAGE_SIZE - len,
 				"Worker #%d: Total decrypted bytes: %llu\n",
 				(int) current_worker,
-				THIS_WORKER(g_decrypt_bytes));
-			spin_unlock_bh(&g_lock);
-		}
+				g_decrypt_bytes_perworker[current_worker]);
+		spin_unlock_bh(&g_lock);
 	}
 
 	buf[len] = 0;
@@ -1298,7 +1251,7 @@ static ssize_t sys_g_cpu_max_store(struct kobject *obj,
 	g_cpu_max = tmp_cpu_max;
 
 	atomic_set(&g_cpu_num_current,
-	     min(atomic_read(&g_cpu_num), g_cpu_max));
+		   min(atomic_read(&g_cpu_num), g_cpu_max));
 	/* Wake up processing threads. */
 	wake_up_interruptible(&g_cpu_wq);
 	return count;
@@ -1380,97 +1333,89 @@ static struct kobj_attribute pending_high_attribute =
 	__ATTR(pending_high, 0644,
 	       sys_g_pending_high_show, sys_g_pending_high_store);
 
-#if KFIPS_MAX_WORKERS > 0
-#define KFIPS_KOBJ_FOR_WORKER(n)					\
-static ssize_t sys_g_busycount##n##_show(struct kobject *obj,		\
-				     struct kobj_attribute *attr,	\
-				     char *buf)				\
-{									\
-	return scnprintf(buf, PAGE_SIZE, "%u\n", g_busycount[n]);	\
-}									\
-									\
-static ssize_t sys_g_busycount##n##_store(struct kobject *obj,		\
-				      struct kobj_attribute *attr,	\
-				      const char *buf,			\
-				      size_t count)			\
-{									\
-	if (count == 0 || buf[0] == '\n') {				\
-		g_busycount[n] = g_busycount_default[n];		\
-		return count;						\
-	}								\
-	sscanf(buf, "%uu", &g_busycount[n]);				\
-	return count;							\
-}									\
-									\
-static struct kobj_attribute thread##n##_busycount_attribute =		\
-	__ATTR(thread##n##_busycount, 0644,				\
-	 sys_g_busycount##n##_show, sys_g_busycount##n##_store);        \
-									\
-static ssize_t sys_g_cpu_balance_affinity##n##_show(struct kobject *obj,\
-				     struct kobj_attribute *attr,	\
-				     char *buf)				\
-{									\
-	return scnprintf(buf, PAGE_SIZE, "%u\n", g_cpu_balance_affinity[n]); \
-}									\
-									\
-static ssize_t sys_g_cpu_balance_affinity##n##_store(struct kobject *obj, \
-				      struct kobj_attribute *attr,	\
-				      const char *buf,			\
-				      size_t count)			\
-{									\
-	if (count == 0 || buf[0] == '\n') {				\
-		g_cpu_balance_affinity[n] = g_cpu_balance_affinity_default[n];\
-		return count;						\
-	}								\
-	sscanf(buf, "%uu", &g_cpu_balance_affinity[n]);			\
-	return count;							\
-}									\
-									\
-static struct kobj_attribute thread##n##_cpu_affinity_attribute =	\
-	__ATTR(thread##n##_cpu_affinity, 0644,				\
-	 sys_g_cpu_balance_affinity##n##_show,                          \
-	 sys_g_cpu_balance_affinity##n##_store);			\
-									\
-static ssize_t sys_g_cpu_balance_flag##n##_show(struct kobject *obj,	\
-				     struct kobj_attribute *attr,	\
-				     char *buf)				\
-{									\
-	static char *noyes[] = { "no", "yes" };				\
-	return scnprintf(buf, PAGE_SIZE, "%s\n",			\
-			 noyes[g_cpu_balance_flag[n]]);			\
-}									\
-									\
-static ssize_t sys_g_cpu_balance_flag##n##_store(struct kobject *obj,	\
-				      struct kobj_attribute *attr,	\
-				      const char *buf,			\
-				      size_t count)			\
-{									\
-	if (count == 0 || buf[0] == '\n') {				\
-		g_cpu_balance_flag[n] = g_cpu_balance_flag_default[n];	\
-		return count;						\
-	}								\
-	g_cpu_balance_flag[n] = count > 0 && buf[0] != 'n' && buf[0] > '0'; \
-	return count;							\
-}									\
-									\
-static struct kobj_attribute thread##n##_set_affinity_attribute =	\
-	__ATTR(thread##n##_set_affinity, 0644,				\
-	 sys_g_cpu_balance_flag##n##_show, sys_g_cpu_balance_flag##n##_store)
+static int sys_g_get_n(struct kobj_attribute *attr)
+{
+	int n = 0;
+	/* Find index n, which is in the middle of the attribute's name. */
+	const char *str = attr->attr.name;
+	while (isalpha(*str))
+		str++;
+	sscanf(str, "%d", &n);
+	if (n > KFIPS_MAX_WORKERS)
+		n = KFIPS_MAX_WORKERS - 1;
+	if (n < 0)
+		n = 0;
+	return n;
+}
 
-KFIPS_KOBJ_FOR_WORKER(0);
-#endif
+static ssize_t sys_g_busycount_n_show(struct kobject *obj,
+				      struct kobj_attribute *attr,
+				      char *buf)
+{
+	int n = sys_g_get_n(attr);
+	return scnprintf(buf, PAGE_SIZE, "%u\n", g_busycount[n]);
+}
 
-#if KFIPS_MAX_WORKERS > 1
-KFIPS_KOBJ_FOR_WORKER(1);
-#endif
+static ssize_t sys_g_busycount_n_store(struct kobject *obj,
+				       struct kobj_attribute *attr,
+				       const char *buf,
+				       size_t count)
+{
+	int n = sys_g_get_n(attr);
+	if (count == 0 || buf[0] == 'n') {
+		g_busycount[n] = g_busycount_default[n];
+		return count;
+	}
+	sscanf(buf, "%uu", &g_busycount[n]);
+	return count;
+}
 
-#if KFIPS_MAX_WORKERS > 2
-KFIPS_KOBJ_FOR_WORKER(2);
-#endif
+static ssize_t sys_g_cpu_balance_affinity_n_show(struct kobject *obj,
+						 struct kobj_attribute *attr,
+						 char *buf)
+{
+	int n = sys_g_get_n(attr);
+	return scnprintf(buf, PAGE_SIZE, "%u\n", g_cpu_balance_affinity[n]);
+}
 
-#if KFIPS_MAX_WORKERS > 3
-KFIPS_KOBJ_FOR_WORKER(3);
-#endif
+static ssize_t sys_g_cpu_balance_affinity_n_store(struct kobject *obj,
+						  struct kobj_attribute *attr,
+						  const char *buf,
+						  size_t count)
+{
+	int n = sys_g_get_n(attr);
+	if (count == 0 || buf[0] == 'n') {
+		g_cpu_balance_affinity[n] =
+			g_cpu_balance_affinity_default[n];
+		return count;
+	}
+	sscanf(buf, "%uu", &g_cpu_balance_affinity[n]);
+	return count;
+}
+
+static ssize_t sys_g_cpu_balance_flag_n_show(struct kobject *obj,
+					     struct kobj_attribute *attr,
+					     char *buf)
+{
+	static const char * const noyes[] = { "no", "yes" };
+	int n = sys_g_get_n(attr);
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+			 noyes[g_cpu_balance_flag[n]]);
+}
+
+static ssize_t sys_g_cpu_balance_flag_n_store(struct kobject *obj,
+					      struct kobj_attribute *attr,
+					      const char *buf,
+					      size_t count)
+{
+	int n = sys_g_get_n(attr);
+	if (count == 0 || buf[0] == 'n') {
+		g_cpu_balance_flag[n] = g_cpu_balance_flag_default[n];
+		return count;
+	}
+	g_cpu_balance_flag[n] = count > 0 && buf[0] != 'n' && buf[0] > '0';
+	return count;
+}
 
 static ssize_t num_queues_active_show(struct kobject *obj,
 				      struct kobj_attribute *attr,
@@ -1481,6 +1426,18 @@ static ssize_t num_queues_active_show(struct kobject *obj,
 
 static struct kobj_attribute num_queues_active_attribute =
 	__ATTR_RO(num_queues_active);
+
+static struct module_version_attribute ___modver_attr;
+static ssize_t version_show(struct kobject *obj,
+				    struct kobj_attribute *attr,
+				    char *buf)
+{
+	/* MatrixDAR version is the same than module version. */
+	return scnprintf(buf, PAGE_SIZE, "%s\n", ___modver_attr.version);
+}
+
+static struct kobj_attribute version_show_attribute =
+	__ATTR_RO(version);
 
 static ssize_t thread_high_active_show(struct kobject *obj,
 				      struct kobj_attribute *attr,
@@ -1504,7 +1461,37 @@ static ssize_t pending_len_show(struct kobject *obj,
 static struct kobj_attribute pending_len_attribute =
 	__ATTR_RO(pending_len);
 
-static struct attribute *attrs[] = {
+static char thread_n_busycount_name[KFIPS_MAX_WORKERS][32];
+static struct kobj_attribute thread_n_busycount_attributes[
+	KFIPS_MAX_WORKERS] = {
+	[0 ... KFIPS_MAX_WORKERS-1] = {
+		.attr = { .mode = 0644 },
+		.show = sys_g_busycount_n_show,
+		.store = sys_g_busycount_n_store
+	}
+};
+
+static char thread_n_cpu_affinity_name[KFIPS_MAX_WORKERS][32];
+static struct kobj_attribute thread_n_cpu_affinity_attributes[
+	KFIPS_MAX_WORKERS] = {
+	[0 ... KFIPS_MAX_WORKERS-1] = {
+		.attr = { .mode = 0644 },
+		.show = sys_g_cpu_balance_affinity_n_show,
+		.store = sys_g_cpu_balance_affinity_n_store
+	}
+};
+
+static char thread_n_set_affinity_name[KFIPS_MAX_WORKERS][32];
+static struct kobj_attribute thread_n_set_affinity_attributes[
+	KFIPS_MAX_WORKERS] = {
+	[0 ... KFIPS_MAX_WORKERS-1] = {
+		.attr = { .mode = 0644 },
+		.show = sys_g_cpu_balance_flag_n_show,
+		.store = sys_g_cpu_balance_flag_n_store
+	}
+};
+
+static struct attribute *attrs[8 + KFIPS_MAX_WORKERS * 3 + 1] = {
 	&num_queues_active_attribute.attr,
 	&thread_normal_active_attribute.attr,
 	&thread_high_active_attribute.attr,
@@ -1512,27 +1499,8 @@ static struct attribute *attrs[] = {
 	&pending_max_attribute.attr,
 	&pending_low_attribute.attr,
 	&pending_high_attribute.attr,
-#if KFIPS_MAX_WORKERS > 0
-	&thread0_busycount_attribute.attr,
-	&thread0_set_affinity_attribute.attr,
-	&thread0_cpu_affinity_attribute.attr,
-#endif
-#if KFIPS_MAX_WORKERS > 1
-	&thread1_busycount_attribute.attr,
-	&thread1_set_affinity_attribute.attr,
-	&thread1_cpu_affinity_attribute.attr,
-#endif
-#if KFIPS_MAX_WORKERS > 2
-	&thread2_busycount_attribute.attr,
-	&thread2_set_affinity_attribute.attr,
-	&thread2_cpu_affinity_attribute.attr,
-#endif
-#if KFIPS_MAX_WORKERS > 3
-	&thread3_busycount_attribute.attr,
-	&thread3_set_affinity_attribute.attr,
-	&thread3_cpu_affinity_attribute.attr,
-#endif
-	NULL
+	&version_show_attribute.attr,
+	[8 ... 8 + KFIPS_MAX_WORKERS * 3] NULL
 };
 
 static struct attribute_group attr_group = {
@@ -1549,6 +1517,28 @@ static int __init kfips_aes_mod_init(void)
 	enum kfips_load_state mstate = KFIPS_STATE_NOTLOADED;
 	unsigned int cpu_id;
 
+	for (i = 0; i < KFIPS_MAX_WORKERS; i++) {
+		snprintf(thread_n_busycount_name[i],
+			 sizeof(thread_n_busycount_name[i]),
+			 "thread%d_busycount", i);
+		thread_n_busycount_attributes[i].attr.name =
+			thread_n_busycount_name[i];
+		attrs[8 + i * 3] = &thread_n_busycount_attributes[i].attr;
+
+		snprintf(thread_n_cpu_affinity_name[i],
+			 sizeof(thread_n_cpu_affinity_name[i]),
+			 "thread%d_cpu_affinity", i);
+		thread_n_cpu_affinity_attributes[i].attr.name =
+			thread_n_cpu_affinity_name[i];
+		attrs[9 + i * 3] = &thread_n_cpu_affinity_attributes[i].attr;
+
+		snprintf(thread_n_set_affinity_name[i],
+			 sizeof(thread_n_set_affinity_name[i]),
+			 "thread%d_set_affinity", i);
+		thread_n_set_affinity_attributes[i].attr.name =
+			thread_n_set_affinity_name[i];
+		attrs[10 + i * 3] = &thread_n_set_affinity_attributes[i].attr;
+	}
 	kfips_kobj = kobject_create_and_add("kfips", kernel_kobj);
 	if (!kfips_kobj)
 		return -ENOMEM;
@@ -1576,13 +1566,13 @@ static int __init kfips_aes_mod_init(void)
 
 	memset(&g_inplay, 0, sizeof(g_inplay));
 
-	pr_err("Loading kfips\n");
+	pr_debug("Loading kfips\n");
 
-	for (i = 0; i < sizeof algs / sizeof algs[0]; i++) {
+	for (i = 0; i < sizeof(algs) / sizeof(algs[0]); i++) {
 		INIT_LIST_HEAD(&algs[i].cra_list);
 		rc = crypto_register_alg(&algs[i]);
 		if (rc != 0) {
-			pr_alert("Error registering %s\n", algs[i].cra_name);
+			pr_err("Error registering %s\n", algs[i].cra_name);
 			while (i > 0)
 				crypto_unregister_alg(&algs[--i]);
 			return rc;
@@ -1630,7 +1620,7 @@ module_exit(kfips_aes_mod_exit);
 
 MODULE_DESCRIPTION("INSIDE Secure FIPS AES-XTS/AES-CBC Driver.");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("1.1.1SP1");
+MODULE_VERSION("1.1.2");
 MODULE_AUTHOR("INSIDE Secure Oy");
 
 module_param(uid, int, 0);

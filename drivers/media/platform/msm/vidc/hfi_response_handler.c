@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -218,6 +218,7 @@ static void hfi_process_session_error(
 	case HFI_ERR_SESSION_INVALID_SCALE_FACTOR:
 	case HFI_ERR_SESSION_UNSUPPORT_BUFFERTYPE:
 	case HFI_ERR_SESSION_UNSUPPORTED_SETTING:
+	case HFI_ERR_SESSION_UPSCALE_NOT_SUPPORTED:
 		dprintk(VIDC_INFO, "Non Fatal : HFI_EVENT_SESSION_ERROR\n");
 		break;
 	default:
@@ -388,6 +389,10 @@ static inline void copy_cap_prop(
 		struct vidc_hal_session_init_done *sess_init_done)
 {
 	struct hal_capability_supported *out = NULL;
+	if (!in) {
+		dprintk(VIDC_ERR, "Invalid input for supported capabilties\n");
+		return;
+	}
 	switch (in->capability_type) {
 	case HFI_CAPABILITY_FRAME_WIDTH:
 		out = &sess_init_done->width;
@@ -420,9 +425,17 @@ static inline void copy_cap_prop(
 	case HFI_CAPABILITY_BITRATE:
 		out = &sess_init_done->bitrate;
 		break;
+
+	case HFI_CAPABILITY_ENC_LTR_COUNT:
+		out = &sess_init_done->ltr_count;
+		break;
+
+	case HFI_CAPABILITY_HIER_P_NUM_ENH_LAYERS:
+		out = &sess_init_done->hier_p;
+		break;
 	}
 
-	if (in && out) {
+	if (out) {
 		out->capability_type =
 			(enum hal_capability)in->capability_type;
 		out->min = in->min;

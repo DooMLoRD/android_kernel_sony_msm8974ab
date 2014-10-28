@@ -42,6 +42,7 @@
 #include <sound/q6asm-v2.h>
 #include <sound/q6audio-v2.h>
 #include "sforce.h"
+#include "clearphase_hp.h"
 
 #include "audio_acdb.h"
 
@@ -156,6 +157,10 @@ static int audio_output_latency_dbgfs_open(struct inode *inode,
 static ssize_t audio_output_latency_dbgfs_read(struct file *file,
 				char __user *buf, size_t count, loff_t *ppos)
 {
+	if (out_buffer == NULL) {
+		pr_err("%s: out_buffer is null\n", __func__);
+		return 0;
+	}
 	snprintf(out_buffer, OUT_BUFFER_SIZE, "%ld,%ld,%ld,%ld,%ld,%ld,",\
 		out_cold_tv.tv_sec, out_cold_tv.tv_usec, out_warm_tv.tv_sec,\
 		out_warm_tv.tv_usec, out_cont_tv.tv_sec, out_cont_tv.tv_usec);
@@ -201,6 +206,10 @@ static int audio_input_latency_dbgfs_open(struct inode *inode,
 static ssize_t audio_input_latency_dbgfs_read(struct file *file,
 				char __user *buf, size_t count, loff_t *ppos)
 {
+	if (in_buffer == NULL) {
+		pr_err("%s: in_buffer is null\n", __func__);
+		return 0;
+	}
 	snprintf(in_buffer, IN_BUFFER_SIZE, "%ld,%ld,",\
 				in_cont_tv.tv_sec, in_cont_tv.tv_usec);
 	return  simple_read_from_buffer(buf, IN_BUFFER_SIZE, ppos,
@@ -316,17 +325,38 @@ static void config_debug_fs_write(struct audio_buffer *ab)
 static void config_debug_fs_init(void)
 {
 	out_buffer = kmalloc(OUT_BUFFER_SIZE, GFP_KERNEL);
+	if (out_buffer == NULL) {
+		pr_err("%s: kmalloc() for out_buffer failed\n", __func__);
+		goto outbuf_fail;
+	}
+	in_buffer = kmalloc(IN_BUFFER_SIZE, GFP_KERNEL);
+	if (in_buffer == NULL) {
+		pr_err("%s: kmalloc() for in_buffer failed\n", __func__);
+		goto inbuf_fail;
+	}
 	out_dentry = debugfs_create_file("audio_out_latency_measurement_node",\
 				S_IRUGO | S_IWUSR | S_IWGRP,\
 				NULL, NULL, &audio_output_latency_debug_fops);
-	if (IS_ERR(out_dentry))
-		pr_err("debugfs_create_file failed\n");
-	in_buffer = kmalloc(IN_BUFFER_SIZE, GFP_KERNEL);
+	if (IS_ERR(out_dentry)) {
+		pr_err("%s: debugfs_create_file failed\n", __func__);
+		goto file_fail;
+	}
 	in_dentry = debugfs_create_file("audio_in_latency_measurement_node",\
 				S_IRUGO | S_IWUSR | S_IWGRP,\
 				NULL, NULL, &audio_input_latency_debug_fops);
-	if (IS_ERR(in_dentry))
-		pr_err("debugfs_create_file failed\n");
+	if (IS_ERR(in_dentry)) {
+		pr_err("%s: debugfs_create_file failed\n", __func__);
+		goto file_fail;
+	}
+	return;
+file_fail:
+	kfree(in_buffer);
+inbuf_fail:
+	kfree(out_buffer);
+outbuf_fail:
+	in_buffer = NULL;
+	out_buffer = NULL;
+	return;
 }
 #else
 static void config_debug_fs_write(struct audio_buffer *ab)
@@ -446,7 +476,7 @@ static int sony_set_volume(struct audio_client *ac, int volume)
 	vol.param.mem_map_handle = 0;
 	vol.param.data_payload_size = sizeof(vol) -
 				sizeof(vol.hdr) - sizeof(vol.param);
-	vol.data.module_id = ASM_MODULE_ID_CA_VPT;
+	vol.data.module_id = ASM_MODULE_ID_SONYBUNDLE;
 	vol.data.param_id = ASM_PARAM_ID_VOL_CTRL_MASTER_GAIN;
 	vol.data.param_size = vol.param.data_payload_size - sizeof(vol.data);
 	vol.data.reserved = 0;
@@ -617,6 +647,31 @@ void sony_send_s_force_param(int type, void *client)
 	if (rc < 0)
 		pr_err("%s: set-param failed rc[%d]\n", __func__, rc);
 }
+
+void sony_send_clearphase_hp_param(void *client)
+{
+	int rc = 0x00;
+	void *param = NULL;
+
+	if (client == NULL) {
+		pr_err("%s: audio client is NULL\n", __func__);
+		return;
+	}
+
+	param = clearphase_hp_getparam();
+	if (param == NULL) {
+		pr_err("%s: clearphase_hp param is NULL\n", __func__);
+		return;
+	}
+
+	rc = sony_popp_effect_set(client, param,
+		sizeof(struct clearphase_hp_tuning_params),
+		ASM_MODULE_ID_SONYBUNDLE,
+		PARAM_ID_CP_HP_TUNING);
+	if (rc < 0)
+		pr_err("%s: set-param failed rc[%d]\n", __func__, rc);
+}
+
 /* SOMC effect control end */
 
 static int q6asm_session_alloc(struct audio_client *ac)
@@ -933,11 +988,8 @@ int q6asm_audio_client_buf_free(unsigned int dir,
 
 		while (cnt >= 0) {
 			if (port->buf[cnt].data) {
-				if (!rc)
-					msm_audio_ion_free(
-						port->buf[cnt].client,
-						port->buf[cnt].handle);
-
+				msm_audio_ion_free(port->buf[cnt].client,
+						   port->buf[cnt].handle);
 				port->buf[cnt].client = NULL;
 				port->buf[cnt].handle = NULL;
 				port->buf[cnt].data = NULL;
@@ -983,9 +1035,7 @@ int q6asm_audio_client_buf_free_contiguous(unsigned int dir,
 			(void *)&port->buf[0].phys,
 			(void *)port->buf[0].client,
 			(void *)port->buf[0].handle);
-		if (!rc)
-			msm_audio_ion_free(port->buf[0].client,
-					   port->buf[0].handle);
+		msm_audio_ion_free(port->buf[0].client, port->buf[0].handle);
 		port->buf[0].client = NULL;
 		port->buf[0].handle = NULL;
 	}
@@ -1027,6 +1077,7 @@ void q6asm_audio_client_free(struct audio_client *ac)
 	apr_deregister(ac->apr);
 	ac->apr = NULL;
 	ac->mmap_apr = NULL;
+	rtac_set_asm_handle(ac->session, ac->apr);
 	q6asm_session_free(ac);
 	q6asm_mmap_apr_dereg();
 
@@ -1432,13 +1483,6 @@ static int32_t q6asm_srvc_callback(struct apr_client_data *data, void *priv)
 			if (payload[1] != 0) {
 				pr_err("%s: cmd = 0x%x returned error = 0x%x sid:%d\n",
 					__func__, payload[0], payload[1], sid);
-				if (payload[0] ==
-				    ASM_CMD_SHARED_MEM_UNMAP_REGIONS)
-					atomic_set(&ac->unmap_cb_success, 0);
-			} else {
-				if (payload[0] ==
-				    ASM_CMD_SHARED_MEM_UNMAP_REGIONS)
-					atomic_set(&ac->unmap_cb_success, 1);
 			}
 
 			if (atomic_read(&ac->cmd_state)) {
@@ -2788,35 +2832,8 @@ fail_cmd:
 /* Support for selecting stereo mixing coefficients for B family not done */
 int q6asm_cfg_aac_sel_mix_coef(struct audio_client *ac, uint32_t mix_coeff)
 {
-	struct asm_aac_stereo_mix_coeff_selection_param_v2 aac_mix_coeff;
-	int rc = 0;
-
-	q6asm_add_hdr(ac, &aac_mix_coeff.hdr, sizeof(aac_mix_coeff), TRUE);
-	aac_mix_coeff.hdr.opcode = ASM_STREAM_CMD_SET_ENCDEC_PARAM;
-	aac_mix_coeff.param_id =
-		ASM_PARAM_ID_AAC_STEREO_MIX_COEFF_SELECTION_FLAG_V2;
-	aac_mix_coeff.param_size =
-		sizeof(struct asm_aac_stereo_mix_coeff_selection_param_v2);
-	aac_mix_coeff.aac_stereo_mix_coeff_flag = mix_coeff;
-	pr_debug("%s, mix_coeff = %u", __func__, mix_coeff);
-	rc = apr_send_pkt(ac->apr, (uint32_t *) &aac_mix_coeff);
-	if (rc < 0) {
-		pr_err("%s:Command opcode[0x%x]paramid[0x%x] failed\n",
-			__func__, ASM_STREAM_CMD_SET_ENCDEC_PARAM,
-			ASM_PARAM_ID_AAC_STEREO_MIX_COEFF_SELECTION_FLAG_V2);
-		goto fail_cmd;
-	}
-	rc = wait_event_timeout(ac->cmd_wait,
-		(atomic_read(&ac->cmd_state) == 0), 5*HZ);
-	if (!rc) {
-		pr_err("%s:timeout opcode[0x%x]\n",
-			__func__, aac_mix_coeff.hdr.opcode);
-		rc = -ETIMEDOUT;
-		goto fail_cmd;
-	}
+	/* To Be Done */
 	return 0;
-fail_cmd:
-	return rc;
 }
 
 int q6asm_enc_cfg_blk_qcelp(struct audio_client *ac, uint32_t frames_per_buf,
@@ -3452,7 +3469,6 @@ int q6asm_memory_unmap(struct audio_client *ac, uint32_t buf_add, int dir)
 			TRUE, ((ac->session << 8) | dir));
 	atomic_set(&ac->cmd_state, 1);
 	mem_unmap.hdr.opcode = ASM_CMD_SHARED_MEM_UNMAP_REGIONS;
-	mem_unmap.mem_map_handle = 0;
 	list_for_each_safe(ptr, next, &ac->port[dir].mem_map_handle) {
 		buf_node = list_entry(ptr, struct asm_buffer_node,
 						list);
@@ -3464,12 +3480,6 @@ int q6asm_memory_unmap(struct audio_client *ac, uint32_t buf_add, int dir)
 	}
 	pr_debug("%s: mem_unmap-mem_map_handle: 0x%x",
 		__func__, mem_unmap.mem_map_handle);
-
-	if (mem_unmap.mem_map_handle == 0) {
-		pr_err("%s Do not send null mem handle to DSP\n", __func__);
-		rc = 0;
-		goto fail_cmd;
-	}
 	rc = apr_send_pkt(ac->mmap_apr, (uint32_t *) &mem_unmap);
 	if (rc < 0) {
 		pr_err("mem_unmap op[0x%x]rc[%d]\n",
@@ -3481,13 +3491,7 @@ int q6asm_memory_unmap(struct audio_client *ac, uint32_t buf_add, int dir)
 	rc = wait_event_timeout(ac->cmd_wait,
 			(atomic_read(&ac->cmd_state) == 0), 5 * HZ);
 	if (!rc) {
-		pr_err("%s timeout. waited for memory_unmap of handle 0x%x\n",
-			__func__, mem_unmap.mem_map_handle);
-		rc = -ETIMEDOUT;
-		goto fail_cmd;
-	} else if (atomic_read(&ac->unmap_cb_success) == 0) {
-		pr_err("%s Error in mem unmap callback of handle 0x%x\n",
-			__func__, mem_unmap.mem_map_handle);
+		pr_err("timeout. waited for memory_unmap\n");
 		rc = -EINVAL;
 		goto fail_cmd;
 	}
@@ -3647,7 +3651,6 @@ static int q6asm_memory_unmap_regions(struct audio_client *ac, int dir)
 	port = &ac->port[dir];
 	buf_add = (uint32_t)port->buf->phys;
 	mem_unmap.hdr.opcode = ASM_CMD_SHARED_MEM_UNMAP_REGIONS;
-	mem_unmap.mem_map_handle = 0;
 	list_for_each_safe(ptr, next, &ac->port[dir].mem_map_handle) {
 		buf_node = list_entry(ptr, struct asm_buffer_node,
 						list);
@@ -3660,12 +3663,6 @@ static int q6asm_memory_unmap_regions(struct audio_client *ac, int dir)
 
 	pr_debug("%s: mem_unmap-mem_map_handle: 0x%x",
 			__func__, mem_unmap.mem_map_handle);
-
-	if (mem_unmap.mem_map_handle == 0) {
-		pr_err("%s Do not send null mem handle to DSP\n", __func__);
-		rc = 0;
-		goto fail_cmd;
-	}
 	rc = apr_send_pkt(ac->mmap_apr, (uint32_t *) &mem_unmap);
 	if (rc < 0) {
 		pr_err("mmap_regions op[0x%x]rc[%d]\n",
@@ -3676,14 +3673,7 @@ static int q6asm_memory_unmap_regions(struct audio_client *ac, int dir)
 	rc = wait_event_timeout(ac->cmd_wait,
 			(atomic_read(&ac->cmd_state) == 0), 5*HZ);
 	if (!rc) {
-		pr_err("%s timeout. waited for memory_unmap of handle 0x%x\n",
-			__func__, mem_unmap.mem_map_handle);
-		rc = -ETIMEDOUT;
-		goto fail_cmd;
-	} else if (atomic_read(&ac->unmap_cb_success) == 0) {
-		pr_err("%s Error in mem unmap callback of handle 0x%x\n",
-			__func__, mem_unmap.mem_map_handle);
-		rc = -EINVAL;
+		pr_err("timeout. waited for memory_unmap\n");
 		goto fail_cmd;
 	}
 	rc = 0;
@@ -3714,8 +3704,8 @@ int q6asm_set_lrgain(struct audio_client *ac, int left_gain, int right_gain)
 	}
 
 	volume_control[ac->session].volume = ((left_gain << 16) | right_gain);
-	if (volume_control[ac->session].module == ASM_MODULE_ID_CA_VPT) {
-		/* Send average volume to ClearAudioVPT module */
+	if (volume_control[ac->session].module == ASM_MODULE_ID_SONYBUNDLE) {
+		/* Send average volume to SonyBundle module */
 		rc = sony_set_volume(ac, (left_gain + right_gain) / 2);
 		if (rc < 0) {
 			pr_err("%s: Send volume failed for CA\n",
@@ -3823,7 +3813,7 @@ int q6asm_set_volume(struct audio_client *ac, int volume)
 	}
 
 	volume_control[ac->session].volume = ((volume << 16) | volume);
-	if (volume_control[ac->session].module == ASM_MODULE_ID_CA_VPT) {
+	if (volume_control[ac->session].module == ASM_MODULE_ID_SONYBUNDLE) {
 		rc = sony_set_volume(ac, volume);
 		if (rc < 0) {
 			pr_err("%s: Send volume failed for CA\n",

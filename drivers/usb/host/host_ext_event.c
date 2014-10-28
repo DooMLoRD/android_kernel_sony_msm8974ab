@@ -3,6 +3,7 @@
  * USB host event handling function
  *
  * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
+ * Copyright (C) 2014 Sony Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -26,6 +27,7 @@ struct host_ext_event_drv {
 	struct class *class;
 	struct device *dev;
 	char name[MAX_NAME_SIZE + 1];
+	int event;
 };
 
 static DEFINE_SEMAPHORE(sem);
@@ -35,6 +37,8 @@ static struct host_ext_event_drv *host_ext_event;
 static const char *event_string(enum usb_host_ext_event event)
 {
 	switch (event) {
+	case USB_HOST_EXT_EVENT_NONE:
+		return "USB_HOST_NONE";
 	case USB_HOST_EXT_EVENT_VBUS_DROP:
 		return "USB_HOST_VBUS_DROP";
 	case USB_HOST_EXT_EVENT_INSUFFICIENT_POWER:
@@ -67,12 +71,32 @@ int host_send_uevent(enum usb_host_ext_event event)
 	snprintf(module, MAX_MODULE_NAME_SIZE, "MODULE=%s", dev->name);
 	ret = kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE, envp);
 
+	dev->event = event;
+
 	up(&sem);
 
 	if (ret < 0)
 		pr_info("uevent sending failed with ret = %d\n", ret);
 
 	return ret;
+}
+
+static int usb_host_ext_uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+	int ret;
+
+	struct host_ext_event_drv *udev = host_ext_event;
+
+	if (udev == NULL)
+		return -ENODEV;
+
+	ret = add_uevent_var(env, "%d", udev->event);
+	if (ret) {
+		dev_err(dev, "failed to add usb host ext uevent\n");
+		return ret;
+	}
+
+	return 0;
 }
 
 static int __init host_ext_event_driver_register(void)
@@ -95,6 +119,10 @@ static int __init host_ext_event_driver_register(void)
 		ret = PTR_ERR(dev->class);
 		goto class_create_fail;
 	}
+
+	dev->class->dev_uevent = usb_host_ext_uevent;
+
+	dev->event = USB_HOST_EXT_EVENT_NONE;
 
 	strlcpy(dev->name, "usb_host_ext_event", MAX_NAME_SIZE);
 

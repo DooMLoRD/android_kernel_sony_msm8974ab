@@ -41,6 +41,13 @@ struct sony_camera_module {
 	uint32_t		mount_angle;
 	uint32_t		sensor_rotation;
 	uint32_t		sensor_facing;
+	uint32_t		pixel_number_w;
+	uint32_t		pixel_number_h;
+	const char		*diagonal_len;
+	const char		*unit_cell_size;
+	const char		*min_f_number;
+	const char		*max_f_number;
+	uint32_t		has_focus_actuator;
 	uint32_t		has_3a;
 	uint32_t		pll_num;
 	uint32_t		pll[MAX_PLL_NUM];

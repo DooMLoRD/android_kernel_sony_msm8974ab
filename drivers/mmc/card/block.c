@@ -3,7 +3,7 @@
  *
  * Copyright 2002 Hewlett-Packard Company
  * Copyright 2005-2008 Pierre Ossman
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * Use consistent with the GNU GPL is permitted,
  * provided that this copyright notice is
@@ -932,145 +932,15 @@ cmd_done:
 	return err;
 }
 
-static int mmc_queue_halt(struct mmc_queue *mq)
-{
-	struct request_queue *q = mq->queue;
-	unsigned long flags;
-	int rc = 0;
-
-	spin_lock_irqsave(q->queue_lock, flags);
-	queue_flag_set(QUEUE_FLAG_STOPPED, q);
-	spin_unlock_irqrestore(q->queue_lock, flags);
-
-	rc = down_trylock(&mq->thread_sem);
-	if (rc) {
-		/*
-		 * Failed to take the lock so better to abort the
-		 * halt because mmcqd thread is processing requests.
-		 */
-		spin_lock_irqsave(q->queue_lock, flags);
-		queue_flag_clear(QUEUE_FLAG_STOPPED, q);
-		spin_unlock_irqrestore(q->queue_lock, flags);
-		rc = -EBUSY;
-	}
-	return rc;
-}
-static void mmc_queue_continue(struct mmc_queue *mq)
-{
-	struct request_queue *q = mq->queue;
-	unsigned long flags;
-	up(&mq->thread_sem);
-
-	spin_lock_irqsave(q->queue_lock, flags);
-	queue_flag_clear(QUEUE_FLAG_STOPPED, q);
-	spin_unlock_irqrestore(q->queue_lock, flags);
-}
-
-static int mmc_oob_close(struct mmc_blk_data *md)
-{
-	struct mmc_blk_data *part_md;
-
-	if (!md)
-		return -EINVAL;
-
-	/* Continue all the halted queues. */
-	md->part_curr = md->part_type;
-	mmc_queue_continue(&md->queue);
-	printk(KERN_WARNING "Queue on %s continued\n",
-	       md->disk->disk_name);
-	list_for_each_entry(part_md, &md->part, part) {
-	  printk(KERN_WARNING "Queue on %s continued\n",
-		 part_md->disk->disk_name);
-	  mmc_queue_continue(&part_md->queue);
-	}
-	return 0;
-}
-
-static int mmc_oob_open(struct mmc_blk_data *md)
-{
-	struct mmc_blk_data *part_md;
-	int rc = 0;
-	printk(KERN_WARNING "Queue oob halt. %s\n", md->disk->disk_name);
-	if (!md)
-		return 0;
-
-	rc = mmc_queue_halt(&md->queue);
-
-	printk(KERN_WARNING "Queue halted status %s %d\n",
-	       md->disk->disk_name, rc);
-	if (rc)
-		return rc;
-
-	list_for_each_entry(part_md, &md->part, part) {
-	  rc = mmc_queue_halt(&part_md->queue);
-	  printk(KERN_WARNING "Queue halted on %s.\n",
-		 part_md->disk->disk_name);
-	}
-	if (rc) {
-		printk(KERN_WARNING "Queue halting failed.\n");
-		mmc_queue_continue(&md->queue);
-		list_for_each_entry(part_md, &md->part, part) {
-			mmc_queue_continue(&part_md->queue);
-		}
-	}
-
-	return rc;
-}
-
-static int mmc_blk_ioctl_oob(struct block_device *bdev,
-	struct mmc_ioc_oob __user *ic_ptr)
-{
-	struct mmc_ioc_oob data;
-	struct mmc_blk_data *md;
-	int ret = -EINVAL;
-
-	/*
-	 * The caller must have CAP_SYS_RAWIO, and must be calling this on the
-	 * whole block device, not on a partition.  This prevents overspray
-	 * between sibling partitions.
-	 */
-	if ((!capable(CAP_SYS_RAWIO)) || (bdev != bdev->bd_contains))
-		return -EPERM;
-
-	if (copy_from_user(&data, ic_ptr, sizeof(data)))
-		return -EFAULT;
-
-	md = mmc_blk_get(bdev->bd_disk);
-
-	if (!md)
-		return -EINVAL;
-
-	if (IS_ERR(md->queue.card)) {
-		mmc_blk_put(md);
-		return PTR_ERR(md->queue.card);
-	}
-
-	if (data.magic == OOB_MAGIC_ON)
-		ret = mmc_oob_open(md);
-	else if (data.magic == OOB_MAGIC_OFF)
-		ret = mmc_oob_close(md);
-
-	mmc_blk_put(md);
-	return ret;
-}
-
 static int mmc_blk_ioctl(struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg)
 {
 	int ret = -EINVAL;
-
-	switch (cmd) {
-	case MMC_IOC_CMD:
+	if (cmd == MMC_IOC_CMD)
 		ret = mmc_blk_ioctl_cmd(bdev, (struct mmc_ioc_cmd __user *)arg);
-		break;
-	case MMC_IOC_RPMB_CMD:
+	if (cmd == MMC_IOC_RPMB_CMD)
 		ret = mmc_blk_ioctl_rpmb_cmd(bdev,
 				(struct mmc_ioc_rpmb __user *)arg);
-		break;
-	case MMC_IOC_OOB:
-		ret = mmc_blk_ioctl_oob(bdev, (struct mmc_ioc_oob __user *)arg);
-		break;
-	}
 	return ret;
 }
 
@@ -2814,6 +2684,7 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 	struct mmc_card *card = md->queue.card;
 	struct mmc_host *host = card->host;
 	unsigned long flags;
+	unsigned int cmd_flags = req ? req->cmd_flags : 0;
 
 	if (req && !mq->mqrq_prev->req) {
 		mmc_rpm_hold(host, &card->dev);
@@ -2841,21 +2712,21 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 
 	mq->flags &= ~MMC_QUEUE_NEW_REQUEST;
 	mq->flags &= ~MMC_QUEUE_URGENT_REQUEST;
-	if (req && req->cmd_flags & REQ_SANITIZE) {
+	if (cmd_flags & REQ_SANITIZE) {
 		/* complete ongoing async transfer before issuing sanitize */
 		if (card->host && card->host->areq)
 			mmc_blk_issue_rw_rq(mq, NULL);
 		ret = mmc_blk_issue_sanitize_rq(mq, req);
-	} else if (req && req->cmd_flags & REQ_DISCARD) {
+	} else if (cmd_flags & REQ_DISCARD) {
 		/* complete ongoing async transfer before issuing discard */
 		if (card->host->areq)
 			mmc_blk_issue_rw_rq(mq, NULL);
-		if (req->cmd_flags & REQ_SECURE &&
+		if (cmd_flags & REQ_SECURE &&
 			!(card->quirks & MMC_QUIRK_SEC_ERASE_TRIM_BROKEN))
 			ret = mmc_blk_issue_secdiscard_rq(mq, req);
 		else
 			ret = mmc_blk_issue_discard_rq(mq, req);
-	} else if (req && req->cmd_flags & REQ_FLUSH) {
+	} else if (cmd_flags & REQ_FLUSH) {
 		/* complete ongoing async transfer before issuing flush */
 		if (card->host->areq)
 			mmc_blk_issue_rw_rq(mq, NULL);
@@ -2878,8 +2749,7 @@ out:
 	 */
 	if ((!req && !(mq->flags & MMC_QUEUE_NEW_REQUEST)) ||
 			((mq->flags & MMC_QUEUE_URGENT_REQUEST) &&
-			 !(mq->mqrq_cur->req->cmd_flags &
-				MMC_REQ_NOREINSERT_MASK))) {
+			 !(cmd_flags & MMC_REQ_NOREINSERT_MASK))) {
 		if (mmc_card_need_bkops(card))
 			mmc_start_bkops(card, false);
 		/* release host only when there are no more requests */
@@ -3288,9 +3158,6 @@ static const struct mmc_fixup blk_fixups[] =
 	MMC_FIXUP(CID_NAME_ANY, CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_BROKEN_DATA_TIMEOUT),
 
-	/* Disable cache for this cards */
-	MMC_FIXUP("H8G2d", CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_CACHE_DISABLE),
 	END_FIXUP
 };
 
@@ -3373,6 +3240,15 @@ static void mmc_blk_shutdown(struct mmc_card *card)
 		}
 	}
 
+#ifdef CONFIG_MMC_CACHE_FEATURE
+	mmc_claim_host(card->host);
+	/* send cache off control */
+	rc = mmc_cache_ctrl(card->host, 0);
+	mmc_release_host(card->host);
+	if (rc)
+		goto cache_off_error;
+#endif
+
 	/* send power off notification */
 	if (mmc_card_mmc(card)) {
 		mmc_rpm_hold(card->host, &card->dev);
@@ -3387,6 +3263,13 @@ static void mmc_blk_shutdown(struct mmc_card *card)
 suspend_error:
 	pr_err("%s: mmc_queue_suspend returned error = %d",
 			mmc_hostname(card->host), rc);
+#ifdef CONFIG_MMC_CACHE_FEATURE
+	return;
+
+cache_off_error:
+	pr_err("%s: mmc_cache_ctrl returned error = %d",
+			mmc_hostname(card->host), rc);
+#endif
 }
 
 #ifdef CONFIG_PM

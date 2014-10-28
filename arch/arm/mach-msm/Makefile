@@ -100,6 +100,7 @@ obj-$(CONFIG_MSM_FIQ_SUPPORT) += fiq_glue.o
 obj-$(CONFIG_MACH_TROUT) += board-trout-rfkill.o
 obj-$(CONFIG_MSM_BAM_DMUX) += bam_dmux.o
 obj-$(CONFIG_MSM_SMD_LOGGING) += smem_log.o
+obj-$(CONFIG_MSM_COMMON_LOG) += common_log.o
 obj-$(CONFIG_MSM_IPC_LOGGING) += ipc_logging.o
 ifdef CONFIG_DEBUG_FS
 obj-$(CONFIG_MSM_IPC_LOGGING) += ipc_logging_debug.o
@@ -298,7 +299,7 @@ obj-$(CONFIG_ARCH_MSM8610) += acpuclock-8226.o acpuclock-cortex.o
 obj-$(CONFIG_ARCH_MSM8610) += clock-dsi-8610.o
 obj-$(CONFIG_ARCH_MSMKRYPTON) += clock-local2.o clock-pll.o clock-krypton.o clock-rpm.o clock-voter.o
 
-obj-$(CONFIG_MSM_PM) += msm-pm.o pm-data.o
+obj-$(CONFIG_MSM_PM) += msm-pm.o pm-data.o ext-buck-control.o
 
 obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire.o board-sapphire-gpio.o
 obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-keypad.o board-sapphire-panel.o
@@ -306,21 +307,26 @@ obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-mmc.o board-sapphire-wifi.o
 obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-rfkill.o msm_vibrator.o
 
 ifdef CONFIG_MACH_SONY_SIRIUS
-	obj-$(CONFIG_MACH_SONY_SIRIUS) += board-sony_sirius-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-gouf.o
-else ifdef CONFIG_MACH_SONY_SIRIUS_BRAZIL
-	obj-$(CONFIG_MACH_SONY_SIRIUS_BRAZIL) += board-sony_sirius_brazil-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-gouf.o
+	obj-$(CONFIG_MACH_SONY_SIRIUS) += board-sony_sirius-gpiomux.o board-sony_sirius_samba-gpiomux-diff.o board-sony_shinano-nfc.o bms-batterydata-gouf.o
 else ifdef CONFIG_MACH_SONY_CASTOR
 	obj-$(CONFIG_MACH_SONY_CASTOR) += board-sony_castor-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
 else ifdef CONFIG_MACH_SONY_CASTOR_BRAZIL
 	obj-$(CONFIG_MACH_SONY_CASTOR_BRAZIL) += board-sony_castor_brazil-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
 else ifdef CONFIG_MACH_SONY_CASTOR_WINDY
 	obj-$(CONFIG_MACH_SONY_CASTOR_WINDY) += board-sony_castor_windy-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-vega.o
-else ifdef CONFIG_MACH_SONY_CANOPUS
-	obj-$(CONFIG_MACH_SONY_CANOPUS) += board-sony_canopus-gpiomux.o bms-batterydata-zock.o board-sony_shinano-nfc.o
+else ifdef CONFIG_MACH_SONY_LEO
+	obj-$(CONFIG_MACH_SONY_LEO) += board-sony_leo-gpiomux.o board-sony_leo_samba-gpiomux-diff.o bms-batterydata-leo.o board-sony_shinano-nfc.o
+else ifdef CONFIG_MACH_SONY_ARIES
+	obj-$(CONFIG_MACH_SONY_ARIES) += board-sony_aries-gpiomux.o bms-batterydata-aries.o board-sony_shinano-nfc.o
+else ifdef CONFIG_MACH_SONY_SCORPION
+	obj-$(CONFIG_MACH_SONY_SCORPION) += board-sony_scorpion-gpiomux.o bms-batterydata-scorpion.o board-sony_shinano-nfc.o
+else ifdef CONFIG_MACH_SONY_SCORPION_WINDY
+	obj-$(CONFIG_MACH_SONY_SCORPION_WINDY) += board-sony_scorpion_windy-gpiomux.o bms-batterydata-scorpion.o board-sony_shinano-nfc.o
 else
 	obj-$(CONFIG_ARCH_MSM8974) += board-8974-gpiomux.o board-sony_shinano-nfc.o bms-batterydata-oem.o
 endif
-obj-$(CONFIG_ARCH_MSM8974) += board-8974-wifi.o
+obj-$(CONFIG_ARCH_MSM8974) += board-sony_shinano-wifi.o
+obj-$(CONFIG_ARCH_MSM8974) += board-sony_shinano-hw.o sony_gpiomux.o board-sony_shinano-gpiomux-ref.o
 
 CFLAGS_msm_vibrator.o += -Idrivers/staging/android
 CFLAGS_board-9615.o += -Idrivers/usb/gadget
@@ -331,7 +337,6 @@ obj-$(CONFIG_TROUT_BATTCHG) += htc_battery.o
 
 obj-$(CONFIG_HTC_PWRSINK) += htc_pwrsink.o
 obj-$(CONFIG_HTC_HEADSET) += htc_headset.o
-obj-$(CONFIG_MSM_RMT_STORAGE_CLIENT) += rmt_storage_client.o
 obj-$(CONFIG_MSM_RPM) += rpm.o rpm_resources.o
 obj-$(CONFIG_MSM_LPM_TEST) += test-lpm.o
 obj-$(CONFIG_MSM_RPM_SMD) += rpm-smd.o lpm_levels.o

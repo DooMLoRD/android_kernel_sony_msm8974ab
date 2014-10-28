@@ -1,4 +1,0 @@
-#ifndef _LINUX_POWER_SUPPLY_H
-#define _LINUX_POWER_SUPPLY_H
-
-#endif /* _LINUX_POWER_SUPPLY_H */

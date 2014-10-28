@@ -6,7 +6,7 @@
 * suspend, resume, initialization routines etc.
 * AD7146 Controller Driver
 * Copyright 2013 Analog Devices Inc.
-* Copyright (c) 2013-2014 Sony Mobile Communications AB.
+* Copyright (C) 2013 Sony Mobile Communications Inc.
 * Licensed under the GPL version 2 or later.
 */
 
@@ -188,8 +188,6 @@ typedef int (*ad7146_write_t)(struct device *, unsigned short, unsigned short);
 #define LOW_NIBBLE				0x0F
 #define HW_DET_MASK				0xFFF0
 #define ADD_FACTOR				0x1
-#define HYS_PERCENT1			40
-#define HYS_PERCENT2			10
 #define I2C_ACCESS_RETRY_MAX	5
 #define I2C_ACCESS_RETRY_WAIT	10
 #define SW_INIT_STATUS			2
@@ -205,6 +203,7 @@ typedef int (*ad7146_write_t)(struct device *, unsigned short, unsigned short);
 #define PAD1					0
 #define PAD2					1
 #define GET_DATA_REG_MAX		3
+#define AMB_COMP_CTRL_NUM_MAX	3
 #define SWITCH_WORK_NO_JITTER	0
 #define SWITCH_WORK_JITTER		50
 #define SWITCH_WORK_FORCE_CAL_JITTER	50
@@ -257,6 +256,12 @@ enum ad7146_data_point {
 	AD7146_LOW,
 	AD7146_CORRECT,
 	AD7146_HIGH,
+};
+
+enum ad7146_reg_amb_comp_ctrlx {
+	AMB_COMP_CTRL_NUM0,
+	AMB_COMP_CTRL_NUM1,
+	AMB_COMP_CTRL_NUM2,
 };
 
 enum ad7146_register_setup_order {
@@ -348,7 +353,7 @@ static struct ad7146_shadow_reg shadow_reg[] = {
 	{AMB_COMP_CTRL0_REG,	0x30FB}, /* FORCE_CAL disabled */
 };
 
-struct ad7146_product_data {
+struct ad7146_product_stgx_data {
 	unsigned int stgx_conn_6_0;
 	unsigned int stgx_conn_12_7;
 	unsigned int stgx_afe_offset;
@@ -357,6 +362,21 @@ struct ad7146_product_data {
 	unsigned int stgx_offset_high;
 	unsigned int stgx_offset_high_clamp;
 	unsigned int stgx_offset_low_clamp;
+	unsigned int stgx_hysterisis;
+};
+
+static struct ad7146_product_stgx_data default_stgx_data = {
+	STGx_CONNECT_OFF1, STGx_CONNECT_OFF2,
+	RET_ZERO_VAL, RET_ZERO_VAL,
+	RET_ZERO_VAL, RET_ZERO_VAL,
+	RET_ZERO_VAL, RET_ZERO_VAL,
+	RET_ZERO_VAL
+};
+
+struct ad7146_product_data {
+	unsigned int amb_comp_ctrlx[AMB_COMP_CTRL_NUM_MAX];
+	unsigned int mod_freq_ctrl;
+	struct ad7146_product_stgx_data stgx_data[PAD_NUM_MAX];
 };
 
 struct ad7146_driver_data {
@@ -407,7 +427,7 @@ struct ad7146_chip {
 	unsigned short i2c_err_flag;
 	unsigned short pad_enable_state;
 	int current_pad_no;
-	struct ad7146_product_data product_data[PAD_NUM_MAX];
+	struct ad7146_product_data product_data;
 	unsigned short save_data_point[PAD_NUM_MAX];
 	unsigned short fc_flag;
 	unsigned short keep_detect_flag;
@@ -632,6 +652,7 @@ static void dac_calibration_work(struct work_struct *work)
 	unsigned char stage_cal_status[STAGE_NUM] = {[0 ... (STAGE_NUM-1)] = 0};
 	unsigned char afe_written[STAGE_NUM] = {[0 ... (STAGE_NUM-1)] = 0};
 	unsigned short calib_pending = ad7146->stg_connection;
+	struct ad7146_product_stgx_data *pt;
 
 	if (!ad7146->pad_enable_state) {
 		dev_info(ad7146->dev,
@@ -849,8 +870,16 @@ static void dac_calibration_work(struct work_struct *work)
 			}
 			/* Update the AFE for the CURRENT STAGE */
 			ad7146->write(ad7146->dev, dac_afe_reg, dac_cur_afe);
-			ad7146->product_data[dac_curr_stg].stgx_afe_offset =
-				dac_cur_afe;
+			if (PAD_NUM_MAX > dac_curr_stg) {
+				pt = &ad7146->product_data.
+					stgx_data[dac_curr_stg];
+				if (!pt) {
+					dev_err(ad7146->dev, "%s: pt is NULL!",
+						__func__);
+					goto er_cal_f;
+				}
+				pt->stgx_afe_offset = dac_cur_afe;
+			}
 		}
 		/* Sleep after one complete cycle of AFE changes */
 		msleep(dac_sleeptime);
@@ -861,8 +890,16 @@ static void dac_calibration_work(struct work_struct *work)
 				dac_curr_stg++) {
 			dac_afe_reg = GET_AFE_REG(dac_curr_stg);
 			ad7146->read(ad7146->dev, dac_afe_reg, &dac_cur_afe);
-			ad7146->product_data[dac_curr_stg].stgx_afe_offset =
-				dac_cur_afe;
+			if (PAD_NUM_MAX > dac_curr_stg) {
+				pt = &ad7146->product_data.
+					stgx_data[dac_curr_stg];
+				if (!pt) {
+					dev_err(ad7146->dev, "%s: pt is NULL!",
+						__func__);
+					goto er_cal_f;
+				}
+				pt->stgx_afe_offset = dac_cur_afe;
+			}
 		}
 		*ad7146->dac_cal_buffer = dac_tot_caldata;
 		dev_err(ad7146->dev, "SUCCESS\t TOTAL_STG = %d!!!\n",
@@ -979,6 +1016,7 @@ static void getStageInfo(struct ad7146_chip *ad7146)
 		last_stage_num);
 	dev_dbg(ad7146->dev, "sensor_int_enable  = %d\n",
 		ad7146->sensor_int_enable);
+	return;
 }
 
 static ssize_t store_dac_mid_value(struct device *dev,
@@ -1161,6 +1199,12 @@ static ssize_t show_pad_data(struct device *dev,
 		dev_err(ad7146->dev, "%s not enable pad !", __func__);
 		return -EINVAL;
 	}
+	if (PAD1 > ad7146->current_pad_no ||
+		PAD_NUMBER_MAX <= ad7146->current_pad_no) {
+		dev_err(ad7146->dev, "%s: Invalid current_pad_no (%u)",
+			__func__, ad7146->current_pad_no);
+		return -EINVAL;
+	}
 
 	ad7146->read(ad7146->dev,
 		(CDC_RESULT_S0_REG + ad7146->current_pad_no), &rd_data);
@@ -1176,6 +1220,7 @@ static ssize_t store_pad_offset(struct device *dev,
 	struct ad7146_chip *ad7146 = dev_get_drvdata(dev);
 	int err;
 	unsigned short val;
+	struct ad7146_product_stgx_data *pt;
 
 	err = kstrtou16(buf, 0, &val);
 	if (err) {
@@ -1183,9 +1228,20 @@ static ssize_t store_pad_offset(struct device *dev,
 			"%s: INVALID CMD (%d)", __func__, err);
 		return err;
 	}
+	if (PAD1 > ad7146->current_pad_no ||
+		PAD2 < ad7146->current_pad_no) {
+		dev_err(ad7146->dev, "%s: Invalid current_pad_no (%u)",
+			__func__, ad7146->current_pad_no);
+		return -EINVAL;
+	}
 
 	dev_dbg(ad7146->dev, "%s: val = 0x%04x\n", __func__, val);
-	ad7146->product_data[ad7146->current_pad_no].stgx_afe_offset = val;
+	pt = &ad7146->product_data.stgx_data[ad7146->current_pad_no];
+	if (!pt) {
+		dev_err(ad7146->dev, "%s: pt is NULL!", __func__);
+		return -ENOMEM;
+	}
+	pt->stgx_afe_offset = val;
 	return count;
 }
 
@@ -1196,8 +1252,21 @@ static ssize_t show_pad_offset(struct device *dev,
 	int ret;
 	unsigned short val;
 	char temp_buf[TEMP_BUFER_MAX_LEN];
+	struct ad7146_product_stgx_data *pt;
 
-	val = ad7146->product_data[ad7146->current_pad_no].stgx_afe_offset;
+	if (PAD1 > ad7146->current_pad_no ||
+		PAD2 < ad7146->current_pad_no) {
+		dev_err(ad7146->dev, "%s: Invalid current_pad_no (%u)",
+			__func__, ad7146->current_pad_no);
+		return -EINVAL;
+	}
+
+	pt = &ad7146->product_data.stgx_data[ad7146->current_pad_no];
+	if (!pt) {
+		dev_err(ad7146->dev, "%s: pt is NULL!", __func__);
+		return -ENOMEM;
+	}
+	val = pt->stgx_afe_offset;
 	ret = snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 		"0x%04X\n", val);
 	memcpy(buf, temp_buf, ret);
@@ -1236,7 +1305,7 @@ static int ad7146_setup_defaults(struct ad7146_chip *ad7146)
 {
 	int rc = 0;
 	int stage;
-	struct ad7146_product_data *pt;
+	struct ad7146_product_stgx_data *pt;
 
 	for (stage = STG_ZERO; stage < STAGE_NUM; stage++) {
 		ad7146->write(ad7146->dev,
@@ -1246,7 +1315,13 @@ static int ad7146_setup_defaults(struct ad7146_chip *ad7146)
 			STG0_CONNECTION_12_7_REG + stage * STAGE_REG_NUM,
 			STGx_CONNECT_OFF2);
 		if (PAD_NUM_MAX > stage) {
-			pt = &ad7146->product_data[stage];
+			pt = &ad7146->product_data.stgx_data[stage];
+			if (!pt) {
+				dev_err(ad7146->dev, "%s: pt is NULL!",
+					__func__);
+				rc = -ENOMEM;
+				pt = &default_stgx_data;
+			}
 			ad7146->write(ad7146->dev,
 				(STG0_AFE_OFFSET_REG +
 				stage * STAGE_REG_NUM),
@@ -1282,12 +1357,38 @@ static int ad7146_pad_setting(struct ad7146_chip *ad7146,
 	int rc = 0;
 	int i;
 	unsigned short pwr_data, data;
-	struct ad7146_product_data *pt;
+	struct ad7146_product_data *dt;
+	struct ad7146_product_stgx_data *pt0, *pt1;
 
 	dev_dbg(ad7146->dev, "pat setting: before-%x, after-%x\n",
 		ad7146->pad_enable_state, val);
 
+	dt = &ad7146->product_data;
+	if (!dt) {
+		dev_err(ad7146->dev, "%s: dt is NULL!", __func__);
+		return -ENOMEM;
+	}
+	pt0 = &ad7146->product_data.stgx_data[PAD1];
+	pt1 = &ad7146->product_data.stgx_data[PAD2];
+	if ((!pt0 && (val & STG0_EN_FLG)) ||
+		(!pt1 && (val & STG1_EN_FLG))) {
+		dev_err(ad7146->dev, "%s: pt is NULL!", __func__);
+		return -ENOMEM;
+	}
+
 	mutex_lock(&ad7146->mutex_shadow);
+	/* Set product initial data */
+	shadow_reg[MOD_FREQ_CTL].data =
+		(unsigned short)dt->mod_freq_ctrl;
+	shadow_reg[AMB_COMP_CTRL0].data =
+		(unsigned short)dt->amb_comp_ctrlx[AMB_COMP_CTRL_NUM0];
+	shadow_reg[AMB_COMP_CTRL0_2].data =
+		(unsigned short)dt->amb_comp_ctrlx[AMB_COMP_CTRL_NUM0];
+	shadow_reg[AMB_COMP_CTRL1].data =
+		(unsigned short)dt->amb_comp_ctrlx[AMB_COMP_CTRL_NUM1];
+	shadow_reg[AMB_COMP_CTRL2].data =
+		(unsigned short)dt->amb_comp_ctrlx[AMB_COMP_CTRL_NUM2];
+
 	/* Clear all int enable flag */
 	shadow_reg[STG_LOW_INT_EN].data = ALL_STG_INT_EN_OFF;
 	shadow_reg[STG_HIGH_INT_EN].data = ALL_STG_INT_EN_OFF;
@@ -1303,28 +1404,26 @@ static int ad7146_pad_setting(struct ad7146_chip *ad7146,
 			PWR_MODE_LOWPWR;
 
 	if (val & STG0_EN_FLG) {
-		pt = &ad7146->product_data[PAD1];
 		shadow_reg[STG_LOW_INT_EN].data |= STG0_INT_EN;
 		shadow_reg[STG_HIGH_INT_EN].data |= STG0_INT_EN;
 		shadow_reg[STG_CAL_EN].data |= STG0_CAL_EN;
 		shadow_reg[STG0_CONNECTION_6_0].data =
-			(unsigned short)pt->stgx_conn_6_0;
+			(unsigned short)pt0->stgx_conn_6_0;
 		shadow_reg[STG0_CONNECTION_12_7].data =
-			(unsigned short)pt->stgx_conn_12_7;
+			(unsigned short)pt0->stgx_conn_12_7;
 		shadow_reg[AMB_COMP_CTRL0_2].data |= AMB_COMP_FORCE_CAL;
 	} else {
 		shadow_reg[STG0_CONNECTION_6_0].data = STGx_CONNECT_OFF1;
 		shadow_reg[STG0_CONNECTION_12_7].data = STGx_CONNECT_OFF2;
 	}
 	if (val & STG1_EN_FLG) {
-		pt = &ad7146->product_data[PAD2];
 		shadow_reg[STG_LOW_INT_EN].data |= STG1_INT_EN;
 		shadow_reg[STG_HIGH_INT_EN].data |= STG1_INT_EN;
 		shadow_reg[STG_CAL_EN].data |= STG1_CAL_EN;
 		shadow_reg[STG1_CONNECTION_6_0].data =
-			(unsigned short)pt->stgx_conn_6_0;
+			(unsigned short)pt1->stgx_conn_6_0;
 		shadow_reg[STG1_CONNECTION_12_7].data =
-			(unsigned short)pt->stgx_conn_12_7;
+			(unsigned short)pt1->stgx_conn_12_7;
 		shadow_reg[AMB_COMP_CTRL0_2].data |= AMB_COMP_FORCE_CAL;
 	} else {
 		shadow_reg[STG1_CONNECTION_6_0].data = STGx_CONNECT_OFF1;
@@ -1380,10 +1479,22 @@ static ssize_t store_pad_set(struct device *dev,
 		}
 		if (!ad7146->pad_enable_state) {
 			mutex_lock(&ad7146->mutex);
-			ad7146_setup_defaults(ad7146);
+			err = ad7146_setup_defaults(ad7146);
 			mutex_unlock(&ad7146->mutex);
+			if (err) {
+				dev_err(ad7146->dev,
+					"%s: pat default set error [%d]\n",
+					__func__, err);
+				return err;
+			}
 		}
-		ad7146_pad_setting(ad7146, val);
+		err = ad7146_pad_setting(ad7146, val);
+		if (err) {
+			dev_err(ad7146->dev,
+				"%s: pat setting error [%d]\n",
+				__func__, err);
+			return err;
+		}
 		prev_mode = ad7146->pad_enable_state;
 		ad7146->pad_enable_state = val;
 
@@ -1519,6 +1630,7 @@ static void cap_sensor_dev_unregister(struct cap_sensor_dev *cdev)
 	ad7146_sysfs_remove(cdev->dev);
 	dev_set_drvdata(cdev->dev, NULL);
 	device_destroy(cap_sensor_class, MKDEV(0, 1));
+	return;
 }
 
 static void ad7146_hys_comp_neg(struct ad7146_chip *ad7146,
@@ -1532,17 +1644,14 @@ static void ad7146_hys_comp_neg(struct ad7146_chip *ad7146,
 		&high_threshold);
 	ad7146->read(ad7146->dev, GET_AMB_REG(index),
 		&sf_ambient);
-	if (STG_ZERO == index)
-		result = HYS(sf_ambient, high_threshold,
-			HYS_PERCENT1);
-	else
-		result = HYS(sf_ambient, high_threshold,
-			HYS_PERCENT2);
+	result = HYS(sf_ambient, high_threshold,
+		ad7146->product_data.stgx_data[index].stgx_hysterisis);
 	ad7146->write(ad7146->dev, GET_HT_TH_REG(index),
 		result);
 	dev_dbg(ad7146->dev,
 		"N STG%d S:AMB 0x%x, T:HT 0x%x -> HYS:0x%x\n",
 		index, sf_ambient, high_threshold, result);
+	return;
 }
 
 static void ad7146_hys_comp_pos(struct ad7146_chip *ad7146,
@@ -1556,17 +1665,14 @@ static void ad7146_hys_comp_pos(struct ad7146_chip *ad7146,
 		&high_threshold);
 	ad7146->read(ad7146->dev, GET_AMB_REG(index),
 		&sf_ambient);
-	if (STG_ZERO == index)
-		result = HYS_POS(sf_ambient, high_threshold,
-			HYS_PERCENT1);
-	else
-		result = HYS_POS(sf_ambient, high_threshold,
-			HYS_PERCENT2);
+	result = HYS_POS(sf_ambient, high_threshold,
+		ad7146->product_data.stgx_data[index].stgx_hysterisis);
 	ad7146->write(ad7146->dev, GET_HT_TH_REG(index),
 		result);
 	dev_dbg(ad7146->dev,
 		"P STG%d S:AMB 0x%x, T:HT 0x%x -> HYS_POS:0x%x\n",
 		index, sf_ambient, high_threshold, result);
+	return;
 }
 
 /* set switch event routine */
@@ -1769,6 +1875,7 @@ static void switch_set_work(struct work_struct *work)
 	if (tm_val && !ad7146->i2c_err_flag &&
 		((pwr_data & PWR_MODE_SHUTDOWN) != PWR_MODE_SHUTDOWN))
 		schedule_delayed_work(&ad7146->work, msecs_to_jiffies(tm_val));
+	return;
 }
 
 static irqreturn_t ad7146_isr(int irq, void *handle)
@@ -1846,7 +1953,7 @@ static void resume_set_work(struct work_struct *work)
 						struct ad7146_chip,
 						resume_work);
 	struct ad7146_driver_data *sw = NULL;
-	int cnt;
+	int cnt, rc;
 
 	dev_dbg(ad7146->dev, "%s call: pad_enable_state = %x\n",
 		__func__, ad7146->pad_enable_state);
@@ -1870,9 +1977,11 @@ static void resume_set_work(struct work_struct *work)
 
 	enable_irq(ad7146->irq);
 	if (ad7146->pad_enable_state) {
-		ad7146_setup_defaults(ad7146);
-		ad7146_pad_setting(ad7146, ad7146->pad_enable_state);
+		rc = ad7146_setup_defaults(ad7146);
+		if (!rc)
+			ad7146_pad_setting(ad7146, ad7146->pad_enable_state);
 	}
+	return;
 }
 
 static int ad7146_hw_detect(struct ad7146_chip *ad7146)
@@ -1910,8 +2019,12 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 	const char * const prop_stagex_offset_h = "%s%d-offset_h";
 	const char * const prop_stagex_offset_l_clamp = "%s%d-offset_l_clamp";
 	const char * const prop_stagex_offset_h_clamp = "%s%d-offset_h_clamp";
+	const char * const prop_stagex_hysterisis = "%s%d-hysterisis";
+	const char * const prop_amb_comp_ctrlx = "pad,amb_comp_ctrl%d";
+	const char * const prop_mod_freq_ctrl = "pad,mod_freq_ctrl";
 	char temp_buf[TEMP_BUFER_MAX_LEN];
 	int rc, cnt;
+	struct ad7146_product_stgx_data *pt;
 
 	rc = of_property_read_string(dev->of_node, prop_vdd_supply_name,
 		&ad7146->vdd_supply_name);
@@ -1928,11 +2041,16 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 	ad7146->irq_gpio = rc;
 
 	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
+		pt = &ad7146->product_data.stgx_data[cnt];
+		if (!pt) {
+			dev_err(ad7146->dev, "%s: pt is NULL!", __func__);
+			return -ENOMEM;
+		}
 		/* Stagex Connection1 Register value */
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_connect1, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_conn_6_0);
+			&pt->stgx_conn_6_0);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1941,7 +2059,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_connect2, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_conn_12_7);
+			&pt->stgx_conn_12_7);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1950,7 +2068,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_afe, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_afe_offset);
+			&pt->stgx_afe_offset);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1959,7 +2077,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_sensitivity, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_sensitivity);
+			&pt->stgx_sensitivity);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1968,7 +2086,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_offset_l, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_offset_low);
+			&pt->stgx_offset_low);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1977,7 +2095,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_offset_h, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_offset_high);
+			&pt->stgx_offset_high);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1986,7 +2104,7 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_offset_l_clamp, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_offset_high_clamp);
+			&pt->stgx_offset_high_clamp);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -1995,7 +2113,36 @@ static int read_data_from_device_tree(struct ad7146_chip *ad7146)
 		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
 			prop_stagex_offset_h_clamp, prop_stagex, cnt);
 		rc = of_property_read_u32(dev->of_node, temp_buf,
-			&ad7146->product_data[cnt].stgx_offset_low_clamp);
+			&pt->stgx_offset_low_clamp);
+		if (rc < 0) {
+			dev_err(dev, err_format, temp_buf);
+			return rc;
+		}
+		/* Stagex Hysterisis percentage value */
+		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
+			prop_stagex_hysterisis, prop_stagex, cnt);
+		rc = of_property_read_u32(dev->of_node, temp_buf,
+			&pt->stgx_hysterisis);
+		if (rc < 0) {
+			dev_err(dev, err_format, temp_buf);
+			return rc;
+		}
+	}
+
+	/* MOD_FREQ_CTRL Register value */
+	rc = of_property_read_u32(dev->of_node,
+		prop_mod_freq_ctrl, &ad7146->product_data.mod_freq_ctrl);
+	if (rc < 0) {
+		dev_err(dev, err_format, prop_mod_freq_ctrl);
+		return rc;
+	}
+
+	/* AMB_COMP_CTRLx Register value */
+	for (cnt = 0; cnt < AMB_COMP_CTRL_NUM_MAX; cnt++) {
+		snprintf(temp_buf, TEMP_BUFER_MAX_LEN,
+			prop_amb_comp_ctrlx, cnt);
+		rc = of_property_read_u32(dev->of_node, temp_buf,
+			&ad7146->product_data.amb_comp_ctrlx[cnt]);
 		if (rc < 0) {
 			dev_err(dev, err_format, temp_buf);
 			return rc;
@@ -2203,10 +2350,22 @@ static int ad7146_probe(struct i2c_client *client,
 		goto err_cap_reg;
 	}
 
-	ad7146_setup_defaults(ad7146);
-	ad7146_pad_setting(ad7146, (STG0_EN_FLG | STG1_EN_FLG));
+	error = ad7146_setup_defaults(ad7146);
+	if (error) {
+		dev_err(dev, "Failed to setup defaults %d.\n", error);
+		goto err_cap_reg;
+	}
+	error = ad7146_pad_setting(ad7146, (STG0_EN_FLG | STG1_EN_FLG));
+	if (error) {
+		dev_err(dev, "Failed to set all pad-on %d.\n", error);
+		goto err_cap_reg;
+	}
 	getStageInfo(ad7146);
-	ad7146_pad_setting(ad7146, STGX_ALL_OFF);
+	error = ad7146_pad_setting(ad7146, STGX_ALL_OFF);
+	if (error) {
+		dev_err(dev, "Failed to set all pad-off %d.\n", error);
+		goto err_cap_reg;
+	}
 	for (cnt = 0; cnt < PAD_NUM_MAX; cnt++) {
 		driver_data = &ad7146->sw[cnt];
 		driver_data->state = IDLE;
@@ -2242,8 +2401,10 @@ err_out:
 	return -ENODEV;
 }
 
-void ad7146_remove(struct ad7146_chip *ad7146)
+static void ad7146_shutdown(struct i2c_client *client)
 {
+	struct ad7146_chip *ad7146 = i2c_get_clientdata(client);
+
 	free_irq(ad7146->irq, ad7146);
 	cancel_delayed_work(&ad7146->work);
 	cancel_work_sync(&ad7146->calib_work);
@@ -2253,10 +2414,11 @@ void ad7146_remove(struct ad7146_chip *ad7146)
 	switch_dev_unregister(&ad7146->sw_stg1);
 	switch_dev_unregister(&ad7146->sw_stg0);
 	switch_dev_unregister(&ad7146->sw_state);
+	vreg_turn_off(ad7146);
 	kzfree(ad7146->dac_cal_buffer);
 	kzfree(ad7146->sw);
 	kzfree(ad7146);
-	vreg_turn_off(ad7146);
+	return;
 }
 
 #ifdef CONFIG_PM
@@ -2290,13 +2452,6 @@ int ad7146_i2c_resume(struct device *dev)
 static SIMPLE_DEV_PM_OPS(ad7146_pm, ad7146_i2c_suspend, ad7146_i2c_resume);
 #endif
 
-static int ad7146_i2c_remove(struct i2c_client *client)
-{
-	struct ad7146_chip *chip = i2c_get_clientdata(client);
-	ad7146_remove(chip);
-	return 0;
-}
-
 static const struct i2c_device_id ad7146_id[] = {
 	{ "ad7146_NORM", 0 },
 	{ "ad7146_PROX", 1 },
@@ -2312,7 +2467,7 @@ struct i2c_driver ad7146_i2c_driver = {
 #endif
 	},
 	.probe    = ad7146_probe,
-	.remove   = ad7146_i2c_remove,
+	.shutdown = ad7146_shutdown,
 	.id_table = ad7146_id,
 };
 
@@ -2325,6 +2480,7 @@ module_init(ad7146_i2c_init);
 static __exit void ad7146_i2c_exit(void)
 {
 	i2c_del_driver(&ad7146_i2c_driver);
+	return;
 }
 module_exit(ad7146_i2c_exit);
 MODULE_DESCRIPTION("Analog Devices ad7146 Sensor Driver");

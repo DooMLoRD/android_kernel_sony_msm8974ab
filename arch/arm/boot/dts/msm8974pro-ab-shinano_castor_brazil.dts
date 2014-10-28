@@ -1,7 +1,7 @@
 /* arch/arm/boot/dts/msm8974pro-ab-shinano_castor_brazil.dts
  *
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * Author: Shougo Watanabe <Shougo.X.Watanabe@sonymobile.com>
  *
@@ -19,6 +19,8 @@
 
 /include/ "msm8974pro-ab-pm8941.dtsi"
 /include/ "msm8974-mtp.dtsi"
+/include/ "msm8974pro-ab-shinano_common.dtsi"
+/include/ "msm8974pro-ab-shinano_castor_common.dtsi"
 /include/ "msm8974pro-ab-shinano_castor_brazil.dtsi"
 /include/ "dsi-panel-castor.dtsi"
 

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Google, Inc.
- * Copyright (C) 2010-2013, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2010-2014, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Sony Mobile Communications AB.
  * Author: Nick Pelly <npelly@google.com>
  *
@@ -33,6 +33,8 @@
  * @uart_rfr_gpio: GPIO number for UART RFR Line.
  * @bam_tx_ep_pipe_index : BAM TX Endpoint Pipe Index for HSUART
  * @bam_tx_ep_pipe_index : BAM RX Endpoint Pipe Index for HSUART
+ * @no_suspend_delay : Flag used to make system go to suspend
+ * immediately or not
  */
 struct msm_serial_hs_platform_data {
 	int wakeup_irq;  /* wakeup irq */
@@ -47,6 +49,7 @@ struct msm_serial_hs_platform_data {
 	int uart_rfr_gpio;
 	unsigned bam_tx_ep_pipe_index;
 	unsigned bam_rx_ep_pipe_index;
+	bool no_suspend_delay;
 	void (*exit_lpm_cb)(struct uart_port *);
 };
 

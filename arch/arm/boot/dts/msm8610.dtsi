@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -256,6 +256,7 @@
 		reg = <0xfe8050c8 0xc8>;
 		qcom,android-usb-swfi-latency = <1>;
 		qcom,streaming-func = "rndis";
+		qcom,android-usb-uicc-nluns = <1>;
 	};
 
 	rmtfs_sharedmem {
@@ -611,6 +612,7 @@
 		qcom,gpio-miso = <&msmgpio 87 0>;
 		qcom,gpio-clk  = <&msmgpio 89 0>;
 		qcom,gpio-cs0  = <&msmgpio 88 0>;
+		qcom,gpio-cs2  = <&msmgpio 85 0>;
 
 		qcom,infinite-mode = <0>;
 		qcom,use-bam;
@@ -618,6 +620,21 @@
 		qcom,bam-consumer-pipe-index = <18>;
 		qcom,bam-producer-pipe-index = <19>;
 		qcom,master-id = <86>;
+
+		lattice,spi-usb@2 {
+			compatible = "lattice,ice40-spi-usb";
+			reg = <2>;
+			spi-max-frequency = <50000000>;
+			spi-cpol = <1>;
+			spi-cpha = <1>;
+			core-vcc-supply = <&pm8110_l2>;
+			spi-vcc-supply = <&pm8110_l6>;
+			gpio-supply = <&pm8110_l22>;
+			lattice,reset-gpio = <&msmgpio 95 0>;
+			lattice,slave-select-gpio = <&msmgpio 85 0>;
+			lattice,config-done-gpio = <&msmgpio 94 0>;
+			lattice,vcc-en-gpio = <&msmgpio 96 0>;
+		};
 	};
 
 	qcom,pronto@fb21b000 {
@@ -649,16 +666,23 @@
 		qcom,model = "msm8x10-snd-card";
 	};
 
-	qti,msm-pcm {
-		compatible = "qti,msm-pcm-dsp";
-		qti,msm-pcm-dsp-id = <0>;
+	qcom,msm-pcm {
+		compatible = "qcom,msm-pcm-dsp";
+		qcom,msm-pcm-dsp-id = <0>;
 	};
 
-	qti,msm-pcm-low-latency {
-		compatible = "qti,msm-pcm-dsp";
-		qti,msm-pcm-dsp-id = <1>;
-		qti,msm-pcm-low-latency;
-		qti,latency-level = "ultra";
+	qcom,msm-pcm-low-latency {
+		compatible = "qcom,msm-pcm-dsp";
+		qcom,msm-pcm-dsp-id = <1>;
+		qcom,msm-pcm-low-latency;
+		qcom,latency-level = "ultra";
+	};
+
+	qcom,msm-pcm-ultra-low {
+		compatible = "qcom,msm-pcm-dsp";
+		qcom,msm-pcm-dsp-id = <2>;
+		qcom,msm-pcm-low-latency;
+		qcom,latency-level = "ultra";
 	};
 
 	qcom,msm-pcm-routing {
@@ -710,6 +734,13 @@
 			compatible = "qcom,msm-dai-q6-mi2s";
 			qcom,msm-dai-q6-mi2s-dev-id = <1>;
 			qcom,msm-mi2s-rx-lines = <3>;
+			qcom,msm-mi2s-tx-lines = <0>;
+		};
+
+		qcom,msm-dai-q6-mi2s-sec-sd1 {
+			compatible = "qcom,msm-dai-q6-mi2s";
+			qcom,msm-dai-q6-mi2s-dev-id = <4>;
+			qcom,msm-mi2s-rx-lines = <2>;
 			qcom,msm-mi2s-tx-lines = <0>;
 		};
 	};
@@ -1082,7 +1113,7 @@
 		label = "vchg_sns";
 		reg = <2>;
 		qcom,decimation = <0>;
-		qcom,pre-div-channel-scaling = <2>;
+		qcom,pre-div-channel-scaling = <5>;
 		qcom,calibration-type = "absolute";
 		qcom,scale-function = <0>;
 		qcom,hw-settle-time = <0>;

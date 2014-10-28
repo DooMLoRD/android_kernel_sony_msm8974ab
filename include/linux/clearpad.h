@@ -1,7 +1,6 @@
 /* include/linux/clearpad.h
  *
- * Copyright (C) 2010 Sony Ericsson Mobile Communications AB.
- * Copyright (C) 2012 - 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * Author: Courtney Cavin <courtney.cavin@sonyericsson.com>
  *         Yusuke Yoshimura <Yusuke.Yoshimura@sonymobile.com>
@@ -23,74 +22,68 @@
 #define CLEARPADI2C_NAME "clearpad-i2c"
 #define CLEARPAD_RMI_DEV_NAME "clearpad-rmi-dev"
 
-enum synaptics_funcarea_kind {
+enum clearpad_funcarea_kind_e {
 	SYN_FUNCAREA_INSENSIBLE,
 	SYN_FUNCAREA_POINTER,
 	SYN_FUNCAREA_BUTTON,
 	SYN_FUNCAREA_END,
 };
 
-enum synaptics_flip_config {
+enum clearpad_flip_config_e {
 	SYN_FLIP_NONE,
 	SYN_FLIP_X,
 	SYN_FLIP_Y,
 	SYN_FLIP_XY,
 };
 
-struct synaptics_area {
+struct clearpad_area_t {
 	int x1;
 	int y1;
 	int x2;
 	int y2;
 };
 
-struct synaptics_funcarea {
-	struct synaptics_area original; /* actual area */
-	struct synaptics_area extension; /* extended area to track events */
-	enum synaptics_funcarea_kind func;
+struct clearpad_funcarea_t {
+	struct clearpad_area_t original; /* actual area */
+	struct clearpad_area_t extension; /* extended area to track events */
+	enum clearpad_funcarea_kind_e func;
 	void *data;
 };
 
-struct synaptics_pointer_data {
+struct clearpad_pointer_data_t {
 	int offset_x;
 	int offset_y;
 };
 
-struct synaptics_button_data {
+struct clearpad_button_data_t {
 	int code;
 	bool down;
 	bool down_report;
 };
 
-struct synaptics_easy_wakeup_config {
-	bool gesture_enable;
-	bool large_panel;
-	u32 timeout_delay;
-};
-
-struct clearpad_platform_data {
+struct clearpad_platform_data_t {
 	int irq_gpio;
 	u32 irq_gpio_flags;
 	char *symlink_name;
 	bool watchdog_enable;
 	int watchdog_poll_t_ms;
-	struct synaptics_easy_wakeup_config *easy_wakeup_config;
 };
 
-struct clearpad_bus_data {
+struct clearpad_bus_data_t {
 	__u16 bustype;
 	struct device *dev;
 	struct device_node *of_node;
-	int (*read)(struct device *dev, u8 reg, u8 *buf, u8 len);
-	int (*write)(struct device *dev, u8 reg, const u8 *buf, u8 len);
+	int (*set_page)(struct device *dev, u8 page);
+	int (*read)(struct device *dev, u16 addr, u8 *buf, u8 len);
+	int (*write)(struct device *dev, u16 addr, const u8 *buf, u8 len);
 	int (*read_block)(struct device *dev, u16 addr, u8 *buf, int len);
 	int (*write_block)(struct device *dev, u16 addr, const u8 *buf,
 				int len);
 };
 
-struct clearpad_data {
-	struct clearpad_platform_data *pdata;
-	struct clearpad_bus_data *bdata;
+struct clearpad_data_t {
+	struct clearpad_platform_data_t *pdata;
+	struct clearpad_bus_data_t *bdata;
 	int probe_retry;
 #ifdef CONFIG_TOUCHSCREEN_CLEARPAD_RMI_DEV
 	struct platform_device *rmi_dev;

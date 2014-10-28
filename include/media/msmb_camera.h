@@ -36,6 +36,7 @@
 #define MSM_CAMERA_SUBDEV_LED_FLASH    11
 #define MSM_CAMERA_SUBDEV_STROBE_FLASH 12
 #define MSM_CAMERA_SUBDEV_BUF_MNGR     13
+#define MSM_CAMERA_SUBDEV_SENSOR_INIT  14
 
 #define MSM_MAX_CAMERA_SENSORS  5
 
@@ -44,7 +45,9 @@
  * large value for number of buffer due to data structure corruption
  * we return error to avoid integer overflow. This value may be
  * configured in future*/
-#define MSM_CAMERA_MAX_STREAM_BUF 40
+/* extension begin */
+#define MSM_CAMERA_MAX_STREAM_BUF 96
+/* extension end */
 
 /* featur base */
 #define MSM_CAMERA_FEATURE_BASE     0x00010000

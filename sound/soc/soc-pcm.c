@@ -1718,12 +1718,6 @@ int soc_dpcm_fe_dai_prepare(struct snd_pcm_substream *substream)
 		}
 	}
 
-	ret = soc_pcm_prepare(substream);
-	if (ret < 0) {
-		dev_err(fe->dev,"dpcm: prepare FE %s failed\n", fe->dai_link->name);
-		goto out;
-	}
-
 	/* run the stream event for each BE */
 	if (stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		tfa98xx_speaker_amp_enable();

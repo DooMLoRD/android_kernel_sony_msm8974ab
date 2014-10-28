@@ -1,6 +1,6 @@
 /* drivers/misc/pn547.c
  *
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -8,6 +8,7 @@
  * of the License, or (at your option) any later version.
  */
 
+#include <linux/async.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -68,7 +69,6 @@ struct pn547_dev {
 	struct pn547_i2c_platform_data	*pdata;
 	enum pn547_state		state;
 	bool				busy;
-	bool				suspended;
 	u16				req_size;
 	atomic_t			res_ready;
 };
@@ -98,10 +98,7 @@ static irqreturn_t pn547_dev_irq_handler(int irq, void *dev_info)
 
 	dev_dbg(d->dev, "%s: interruption\n", __func__);
 	mutex_lock(&lock);
-	if (d->suspended) {
-		dev_dbg(d->dev, "Interruption during suspend.\n");
-		wake_lock_timeout(&d->wake_lock, PN547_WAKE_LOCK_TIMEOUT);
-	}
+	wake_lock_timeout(&d->wake_lock, PN547_WAKE_LOCK_TIMEOUT);
 	atomic_set(&d->res_ready, 1);
 	wake_up_interruptible(&d->wq);
 	mutex_unlock(&lock);
@@ -585,7 +582,6 @@ static int pn547_pm_suspend(struct device *dev)
 		if (IS_ERR_VALUE(ret))
 			dev_err(dev, "%s: irq wake err %d\n", __func__, ret);
 	}
-	d->suspended = true;
 	mutex_unlock(&lock);
 	return 0;
 }
@@ -602,7 +598,6 @@ static int pn547_pm_resume(struct device *dev)
 		if (IS_ERR_VALUE(ret))
 			dev_err(dev, "%s: irq wake err %d\n", __func__, ret);
 	}
-	d->suspended = false;
 	mutex_unlock(&lock);
 	return 0;
 }
@@ -634,9 +629,25 @@ static struct i2c_driver pn547_driver = {
 	},
 };
 
+#ifndef MODULE
+static void __init pn547_dev_init_async(void *unused, async_cookie_t cookie)
+{
+	int rc;
+
+	rc = i2c_add_driver(&pn547_driver);
+	if (rc != 0)
+		pr_err("Maxim I2C registration failed rc = %d\n", rc);
+}
+#endif
+
 static int __init pn547_dev_init(void)
 {
+#ifdef MODULE
 	return i2c_add_driver(&pn547_driver);
+#else
+	async_schedule(pn547_dev_init_async, NULL);
+	return 0;
+#endif
 }
 
 static void __exit pn547_dev_exit(void)

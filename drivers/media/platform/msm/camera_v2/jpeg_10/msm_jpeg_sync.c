@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  * Copyright (C) 2014 Sony Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -666,16 +666,16 @@ int msm_jpeg_ioctl_hw_cmd(struct msm_jpeg_device *pgmn_dev,
 		__func__, __LINE__, hw_cmd.type, hw_cmd.n, hw_cmd.offset,
 		hw_cmd.mask, hw_cmd.data, (int) hw_cmd.pdata);
 
+#if defined(CONFIG_SONY_CAM_V4L2)
+	if (is_copy_to_user > 0) {
+#else
 	if (is_copy_to_user >= 0) {
+#endif
 		if (copy_to_user(arg, &hw_cmd, sizeof(hw_cmd))) {
 			JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
 			return -EFAULT;
 		}
-#if defined(CONFIG_SONY_CAM_V4L2)
-	} else if (-1 != is_copy_to_user) {
-#else
 	} else {
-#endif
 		return is_copy_to_user;
 	}
 
@@ -727,6 +727,9 @@ int msm_jpeg_ioctl_hw_cmds(struct msm_jpeg_device *pgmn_dev,
 			kfree(hw_cmds_p);
 			return -EFAULT;
 		}
+	} else {
+		kfree(hw_cmds_p);
+		return is_copy_to_user;
 	}
 	kfree(hw_cmds_p);
 	return 0;
@@ -770,11 +773,12 @@ int msm_jpeg_start(struct msm_jpeg_device *pgmn_dev, void * __user arg)
 	for (i = 0; i < 2; i++)
 		kfree(buf_out_free[i]);
 
+	pgmn_dev->state = MSM_JPEG_EXECUTING;
 	JPEG_DBG_HIGH("%s:%d] START\n", __func__, __LINE__);
 	wmb();
 	rc = msm_jpeg_ioctl_hw_cmds(pgmn_dev, arg);
 	wmb();
-	pgmn_dev->state = MSM_JPEG_EXECUTING;
+
 	JPEG_DBG("%s:%d]", __func__, __LINE__);
 	return rc;
 }
@@ -948,8 +952,13 @@ int __msm_jpeg_init(struct msm_jpeg_device *pgmn_dev)
 
 	mutex_init(&pgmn_dev->lock);
 
+#if defined(CONFIG_SONY_CAM_V4L2)
+	pr_info("%s:%d] Jpeg Device id %d", __func__, __LINE__,
+		   pgmn_dev->pdev->id);
+#else
 	pr_err("%s:%d] Jpeg Device id %d", __func__, __LINE__,
 		   pgmn_dev->pdev->id);
+#endif
 	idx = pgmn_dev->pdev->id;
 	pgmn_dev->idx = idx;
 	pgmn_dev->iommu_cnt = 1;

@@ -2,7 +2,7 @@
  * lp855x.h - TI LP8556 Backlight Driver
  *
  * Copyright (C) 2011 Texas Instruments
- * Copyright (C) 2012-2013 Sony Mobile Communications AB.
+ * Copyright (c) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -57,6 +57,7 @@ struct lp855x_platform_data {
 	struct lp855x_rom_data *rom_data;
 	u8 cfg3;
 	unsigned gpio_bl_enable;
+	bool bl_on_in_boot;
 };
 
 #endif

@@ -68,7 +68,6 @@ static void log_modem_sfr(struct modem_data *drv)
 	u32 size;
 	char *smem_reason, reason[MAX_SSR_REASON_LEN];
 	const char hwwd_str[] = "SFR Init: wdog or kernel error suspected.";
-	const char ahb_bus_hang_str[] = "ABT_dal.c";
 
 	smem_reason = smem_get_entry_no_rlock(SMEM_SSR_REASON_MSS0, &size);
 	if (!smem_reason || !size) {
@@ -84,10 +83,8 @@ static void log_modem_sfr(struct modem_data *drv)
 	update_crash_reason(drv->subsys, smem_reason, size);
 	pr_err("modem subsystem failure reason: %s.\n", reason);
 
-	if ((0 == strncmp(hwwd_str, reason, sizeof(hwwd_str) - 1) &&
-		force_crash_modem_hwwd != 0) ||
-		(strnstr(reason, ahb_bus_hang_str,
-			strnlen(reason, MAX_SSR_REASON_LEN))))
+	if (0 == strncmp(hwwd_str, reason, sizeof(hwwd_str) - 1) &&
+		force_crash_modem_hwwd != 0)
 		/* Crash system like a subsystem crash due to specific handing
 		   in error reporting */
 		subsys_set_restart_level(drv->subsys, RESET_SOC);

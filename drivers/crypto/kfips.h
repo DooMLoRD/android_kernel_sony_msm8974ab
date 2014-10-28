@@ -168,4 +168,7 @@ struct kfips_reqs_and_data {
 extern int kfips_reqs_and_data_sizecheck_t[
 	sizeof(struct kfips_reqs_and_data) > 16383 ? -1 : 1];
 
+/* KFIPS_Key ID size used by UFIPS and FIPS Lib */
+#define KFIPS_KEY_ID_SIZE ((unsigned int)sizeof(uint32_t))
+
 #endif /* _CRYPTO_KFIPS_H */

@@ -1,6 +1,6 @@
 /* drivers/misc/oneseg_tuner_drv.c
  *
- * Copyright (C) 2013 Sony Mobile Communications AB.
+ * Copyright (C) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -36,6 +36,19 @@
 #define D_ONESEG_CONFIG_PLATFORM_DRIVER_NAME "onesegtuner_pdev"
 #define D_ONESEG_CONFIG_SYSFS_DEV_NAME       "onesegtuner_pdev"
 #define D_ONESEG_CONFIG_CLASS_NAME           "onesegtuner"
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+#define D_ONESEG_CONFIG_MATCH_TABLE          "sony,vj190"
+
+#define D_ONESEG_CONFIG_DRV_MAJOR             110
+#define D_ONESEG_CONFIG_DRV_MINOR             210
+#define D_ONESEG_POWER_ON_WAIT_US            3000
+#define D_ONESEG_POWER_ON_WAIT_RANGE_US      3100
+#define D_ONESEG_RESET_ON_WAIT_US            1000
+#define D_ONESEG_RESET_ON_WAIT_RANGE_US      1100
+#define D_ONESEG_RESET_OFF_WAIT_US           1000
+#define D_ONESEG_RESET_OFF_WAIT_RANGE_US     1100
+#define D_ONESEG_I2C_ADAPTER_ID                11
+#else
 #define D_ONESEG_CONFIG_MATCH_TABLE          "sony,vj180"
 
 #define D_ONESEG_CONFIG_DRV_MAJOR             110
@@ -48,16 +61,23 @@
 #define D_ONESEG_RESET_OFF_WAIT_RANGE_US     1100
 #define D_ONESEG_POWER_OFF_WAIT_US           5000
 #define D_ONESEG_POWER_OFF_WAIT_RANGE_US     5100
-#define D_ONESEG_I2C_ADAPTER_ID                 4
+#define D_ONESEG_I2C_ADAPTER_ID                11
+#endif
 
 enum oneseg_gpio_id {
 	ONESEG_POWER_PIN = 0,
 	ONESEG_RESET_PIN,
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	ONESEG_INT_PIN,
+#endif
 };
 
 static char const * const oneseg_gpio_rsrcs[] = {
 	"Oneseg tuner power",
 	"Oneseg tuner reset",
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	"Oneseg tuner int",
+#endif
 };
 
 enum ONESEG_DRV_CTL {
@@ -65,7 +85,12 @@ enum ONESEG_DRV_CTL {
 	ONESEG_DRV_CTL_POWOFF,
 	ONESEG_DRV_CTL_RESET
 };
-
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+enum ONESEG_DRV_IRQ {
+	ONESEG_DRV_IRQ_NOT_DETECTED,
+	ONESEG_DRV_IRQ_DETECTED,
+};
+#endif
 struct oneseg_tuner_drvdata {
 	struct device *dev;
 	struct device sysfs_dev;
@@ -79,11 +104,19 @@ struct g_oneseg_tuner_device {
 	unsigned long open_cnt;
 	struct platform_device *onesegtuner_device;
 	struct class *device_class;
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	u32 irq_flag;
+	wait_queue_head_t irq_wait_q;
+	int irq_num;
+#endif
 } oneseg_dev;
 
 static enum oneseg_gpio_id req_ids[] = {
 	ONESEG_POWER_PIN,
 	ONESEG_RESET_PIN,
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	ONESEG_INT_PIN,
+#endif
 };
 
 static void oneseg_tunerpm_power_control(struct oneseg_tuner_drvdata
@@ -167,8 +200,10 @@ static int tuner_drv_ctl_power(struct oneseg_tuner_drvdata *drvdata, int data)
 		usleep_range(D_ONESEG_RESET_OFF_WAIT_US,
 			D_ONESEG_RESET_OFF_WAIT_RANGE_US);
 		oneseg_tunerpm_reset_control(drvdata, 0);
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ18X
 		usleep_range(D_ONESEG_POWER_OFF_WAIT_US,
 			D_ONESEG_POWER_OFF_WAIT_RANGE_US);
+#endif
 		oneseg_tunerpm_power_control(drvdata, 0);
 		mutex_unlock(&drvdata->mutex_lock);
 		break;
@@ -177,7 +212,35 @@ static int tuner_drv_ctl_power(struct oneseg_tuner_drvdata *drvdata, int data)
 	}
 	return 0;
 }
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+irqreturn_t tuner_interrupt(int irq, void *dev_id)
+{
+	if (oneseg_dev.irq_flag == ONESEG_DRV_IRQ_NOT_DETECTED) {
+		oneseg_dev.irq_flag = ONESEG_DRV_IRQ_DETECTED;
+		wake_up_interruptible(&oneseg_dev.irq_wait_q);
+	}
+	return IRQ_HANDLED;
+}
 
+static int tuner_drv_set_interrupt(int int_num)
+{
+	int ret;
+
+	oneseg_dev.irq_num = gpio_to_irq(int_num);
+	ret = request_threaded_irq(oneseg_dev.irq_num, tuner_interrupt,
+		NULL, IRQF_TRIGGER_RISING, D_ONESEG_CONFIG_CLASS_NAME, NULL);
+	if (ret) {
+		gpio_free(int_num);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static void tuner_drv_release_interrupt(void)
+{
+	free_irq(oneseg_dev.irq_num, NULL);
+}
+#endif
 static ssize_t tuner_module_power_ctrl(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -202,14 +265,51 @@ static ssize_t tuner_module_power_ctrl(struct device *dev,
 	}
 	return count;
 }
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+static ssize_t tuner_module_irq_ctrl(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long value;
+	struct oneseg_tuner_drvdata *drvdata = dev_get_drvdata(dev);
 
+	if (kstrtoul(buf, 0, &value))
+		return -EINVAL;
+
+	if (!value) {
+		if (tuner_drv_set_interrupt(drvdata->gpios[ONESEG_INT_PIN]))
+			return -EINVAL;
+	} else {
+		tuner_drv_release_interrupt();
+		oneseg_dev.irq_flag = ONESEG_DRV_IRQ_NOT_DETECTED;
+	}
+
+	return count;
+}
+
+static ssize_t tuner_module_irq_detect_read(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	wait_event_interruptible(oneseg_dev.irq_wait_q,
+		(oneseg_dev.irq_flag == ONESEG_DRV_IRQ_DETECTED));
+	return snprintf(buf, 1, "%d", oneseg_dev.irq_flag);
+}
+
+static ssize_t tuner_module_irq_detect_write(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	oneseg_dev.irq_flag = ONESEG_DRV_IRQ_NOT_DETECTED;
+	return count;
+}
+#endif
 static int tuner_module_entry_open(struct inode *inode, struct file *file)
 {
 	if (oneseg_dev.open_cnt > 0)
 		return -EBUSY;
 	else
 		oneseg_dev.open_cnt++;
-
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	oneseg_dev.irq_flag = ONESEG_DRV_IRQ_NOT_DETECTED;
+#endif
 	return 0;
 }
 
@@ -233,6 +333,11 @@ static int tuner_module_entry_close(struct inode *inode, struct file *file)
 
 static struct device_attribute tuner_sysfs_attrs[] = {
 	__ATTR(oneseg_power_ctrl, S_IWUSR, 0, tuner_module_power_ctrl),
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	__ATTR(oneseg_irq_ctrl, S_IWUSR, 0, tuner_module_irq_ctrl),
+	__ATTR(oneseg_irq, S_IWUSR | S_IRUSR, tuner_module_irq_detect_read,
+		tuner_module_irq_detect_write),
+#endif
 };
 
 static const struct file_operations tuner_file_operations = {
@@ -317,9 +422,16 @@ static int oneseg_tuner_probe(struct platform_device *pdev)
 	}
 
 	mutex_init(&oneseg_dev.g_tuner_mutex);
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+	init_waitqueue_head(&oneseg_dev.irq_wait_q);
 
+	if (tuner_drv_set_interrupt(drvdata->gpios[ONESEG_INT_PIN]))
+		goto err_irq_set;
+#endif
 	return 0;
-
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+err_irq_set:
+#endif
 err_create_file:
 err_gpio_init:
 	i2c_put_adapter(drvdata->adap);
@@ -362,8 +474,11 @@ static void oneseg_tuner_shutdown(struct platform_device *pdev)
 	class_destroy(oneseg_dev.device_class);
 	platform_device_unregister(oneseg_dev.onesegtuner_device);
 }
-
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+static struct of_device_id vj190_match_table[] = {
+#else
 static struct of_device_id vj180_match_table[] = {
+#endif
 {	.compatible = D_ONESEG_CONFIG_MATCH_TABLE,
 },
 {}
@@ -376,7 +491,11 @@ static struct platform_driver onesegtuner_driver = {
 	.driver = {
 		.name = D_ONESEG_CONFIG_PLATFORM_DRIVER_NAME,
 		.owner = THIS_MODULE,
+#ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
+		.of_match_table = vj190_match_table,
+#else
 		.of_match_table = vj180_match_table,
+#endif
 	},
 };
 

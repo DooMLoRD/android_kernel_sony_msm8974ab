@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2014 Sony Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -79,6 +80,12 @@ enum wcd9xxx_mbhc_plug_type {
 	PLUG_TYPE_HIGH_HPH,
 	PLUG_TYPE_GND_MIC_SWAP,
 	PLUG_TYPE_ANC_HEADPHONE,
+	PLUG_TYPE_STEREO_MICROPHONE,
+};
+
+enum wcd9xxx_mbhc_micbias_type {
+	MBHC_PRIMARY_MIC_MB,
+	MBHC_ANC_MIC_MB,
 };
 
 enum wcd9xxx_micbias_num {
@@ -87,6 +94,12 @@ enum wcd9xxx_micbias_num {
 	MBHC_MICBIAS2,
 	MBHC_MICBIAS3,
 	MBHC_MICBIAS4,
+};
+
+enum hw_jack_type {
+	FOUR_POLE_JACK = 0,
+	FIVE_POLE_JACK,
+	SIX_POLE_JACK,
 };
 
 enum wcd9xx_mbhc_micbias_enable_bits {
@@ -235,7 +248,8 @@ struct wcd9xxx_mbhc_config {
 	bool use_int_rbias;
 	bool do_recalibration;
 	bool use_vddio_meas;
-	bool is_5_pole;
+	bool enable_anc_mic_detect;
+	enum hw_jack_type hw_jack_type;
 };
 
 struct wcd9xxx_cfilt_mode {
@@ -270,7 +284,7 @@ struct wcd9xxx_mbhc_cb {
 			   enum mbhc_impedance_detect_stages stage);
 	void (*compute_impedance) (s16 *, s16 *, uint32_t *, uint32_t *);
 	void (*enable_mbhc_txfe) (struct snd_soc_codec *, bool);
-	int (*enable_mb_source) (struct snd_soc_codec *, bool);
+	int (*enable_mb_source) (struct snd_soc_codec *, bool, bool);
 	void (*setup_int_rbias) (struct snd_soc_codec *, bool);
 	void (*pull_mb_to_vddio) (struct snd_soc_codec *, bool);
 };

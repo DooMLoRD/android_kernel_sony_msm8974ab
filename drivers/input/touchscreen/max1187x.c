@@ -17,6 +17,7 @@
  */
 
 #include <asm/byteorder.h>
+#include <linux/async.h>
 #include <linux/crc16.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -3053,9 +3054,25 @@ static struct i2c_driver driver = {
 		},
 };
 
+#ifndef MODULE
+void __devinit max1187x_init_async(void *unused, async_cookie_t cookie)
+{
+	int rc;
+
+	rc = i2c_add_driver(&driver);
+	if (rc != 0)
+		pr_err("Maxim I2C registration failed rc = %d\n", rc);
+}
+#endif
+
 static int __devinit max1187x_init(void)
 {
+#ifdef MODULE
 	return i2c_add_driver(&driver);
+#else
+	async_schedule(max1187x_init_async, NULL);
+	return 0;
+#endif
 }
 
 static void __exit max1187x_exit(void)

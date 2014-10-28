@@ -1,5 +1,5 @@
 /* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
- * Copyright (c) 2013 Sony Mobile Communications AB.
+ * Copyright (c) 2013 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -122,6 +122,13 @@ void msm_reserve_last_regs(void)
 		goto err0;
 	}
 
+	if (memblock_is_region_reserved(dump_table_phys,
+			sizeof(struct msm_dump_table))) {
+		printk(KERN_INFO "%s: Dump table is in a reserved range: 0x%lx\n",
+			__func__, dump_table_phys);
+		goto err0;
+	}
+
 	ret = memblock_reserve(dump_table_phys, sizeof(struct msm_dump_table));
 	if (ret) {
 		printk(KERN_ERR "%s: Failed to reserve dump table area\n",
@@ -157,6 +164,26 @@ void msm_reserve_last_regs(void)
 		(__phys_to_pfn(dump_entry->start_addr) > max_low_pfn)) {
 		printk(KERN_ERR "%s: last_regs not in lowmem range: 0x%lx\n",
 			__func__, dump_entry->start_addr);
+		goto err1;
+	}
+
+	if (!pfn_valid(__phys_to_pfn(dump_entry->end_addr)) ||
+		(__phys_to_pfn(dump_entry->end_addr) > max_low_pfn)) {
+		printk(KERN_ERR "%s: last_regs not in lowmem range: 0x%lx\n",
+			__func__, dump_entry->end_addr);
+		goto err1;
+	}
+
+	if (dump_entry->start_addr >= dump_entry->end_addr) {
+		printk(KERN_ERR "%s: last_regs not in valid range: 0x%lx - 0x%lx\n",
+			__func__, dump_entry->start_addr, dump_entry->end_addr);
+		goto err1;
+	}
+
+	if (memblock_is_region_reserved(dump_entry->start_addr,
+			dump_entry->end_addr - dump_entry->start_addr)) {
+		printk(KERN_ERR "%s: last_regs is in a reserved range: 0x%lx - 0x%lx\n",
+			__func__, dump_entry->start_addr, dump_entry->end_addr);
 		goto err1;
 	}
 

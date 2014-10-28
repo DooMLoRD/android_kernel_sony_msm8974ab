@@ -2,6 +2,7 @@
  * dwc3_otg.h - DesignWare USB3 DRD Controller OTG
  *
  * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2014 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,6 +25,7 @@
 #include "power.h"
 
 #define DWC3_IDEV_CHG_MAX 1500
+#define DWC3_PROPRIETARY_CHG_MAX 1000
 
 struct dwc3_charger;
 
@@ -91,6 +93,9 @@ struct dwc3_charger {
 	/* to notify OTG about charger detection completion, provided by OTG */
 	void	(*notify_detection_complete)(struct usb_otg *otg,
 						struct dwc3_charger *charger);
+
+	/* pulldown the D+ line, provided by external charger module */
+	void	(*pulldown_dp)(struct dwc3_charger *charger, bool pulldown);
 };
 
 /* for external charger driver */
