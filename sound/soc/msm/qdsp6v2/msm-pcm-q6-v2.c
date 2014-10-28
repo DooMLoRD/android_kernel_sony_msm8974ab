@@ -31,13 +31,17 @@
 #include <linux/msm_audio_ion.h>
 
 #include <linux/of_device.h>
-#include <sound/pcm_params.h>
 #include <sound/tlv.h>
+#include <sound/pcm_params.h>
 
 #include "msm-pcm-q6-v2.h"
 #include "msm-pcm-routing-v2.h"
 
 static struct audio_locks the_locks;
+
+#define PCM_MASTER_VOL_MAX_STEPS	0x2000
+static const DECLARE_TLV_DB_LINEAR(msm_pcm_vol_gain, 0,
+				PCM_MASTER_VOL_MAX_STEPS);
 
 struct snd_msm {
 	struct snd_card *card;
@@ -52,9 +56,6 @@ struct snd_msm {
 #define CAPTURE_MAX_NUM_PERIODS     8
 #define CAPTURE_MAX_PERIOD_SIZE     4096
 #define CAPTURE_MIN_PERIOD_SIZE     320
-#define PCM_LR_VOL_MAX_STEPS	0x2000
-const DECLARE_TLV_DB_LINEAR(msm_pcm_vol_gain, 0,
-				PCM_LR_VOL_MAX_STEPS);
 
 static struct snd_pcm_hardware msm_pcm_hardware_capture = {
 	.info =                 (SNDRV_PCM_INFO_MMAP |
@@ -852,8 +853,10 @@ static int msm_pcm_volume_ctl_get(struct snd_kcontrol *kcontrol,
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;
 	}
-	if (!substream->runtime)
+	if (!substream->runtime) {
+		pr_err("%s substream runtime not found\n", __func__);
 		return 0;
+	}
 	prtd = substream->runtime->private_data;
 	if (prtd)
 		ucontrol->value.integer.value[0] = prtd->volume;
@@ -875,8 +878,10 @@ static int msm_pcm_volume_ctl_put(struct snd_kcontrol *kcontrol,
 		pr_err("%s substream not found\n", __func__);
 		return -ENODEV;
 	}
-	if (!substream->runtime)
+	if (!substream->runtime) {
+		pr_err("%s substream runtime not found\n", __func__);
 		return 0;
+	}
 	prtd = substream->runtime->private_data;
 	if (prtd) {
 		rc = msm_pcm_set_volume(prtd, volume);
@@ -997,7 +1002,6 @@ static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	if (ret)
 		pr_err("%s: Could not add pcm Volume Control %d\n",
 			__func__, ret);
-
 	return ret;
 }
 

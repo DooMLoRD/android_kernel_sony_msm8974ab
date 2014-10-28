@@ -340,8 +340,8 @@
 		qcom,mdss-dsi-h-back-porch = <8>;
 		qcom,mdss-dsi-h-pulse-width = <8>;
 		qcom,mdss-dsi-h-sync-skew = <0>;
-		qcom,mdss-dsi-v-back-porch = <2>;
-		qcom,mdss-dsi-v-front-porch = <239>;
+		qcom,mdss-dsi-v-back-porch = <4>;
+		qcom,mdss-dsi-v-front-porch = <237>;
 		qcom,mdss-dsi-v-pulse-width = <2>;
 		qcom,mdss-dsi-h-left-border = <0>;
 		qcom,mdss-dsi-h-right-border = <0>;
@@ -674,6 +674,8 @@
 		somc,display-clock = <17330000>;
 		somc,driver-ic-vbp = <8>;
 		somc,driver-ic-vfp = <2>;
+		somc,chenge-fps-cmds-num = <1>;
+		somc,chenge-fps-payload-num = <1>;
 
 		somc,chenge-wait-update = <1>;
 		somc,chenge-wait-on = <40 60>;
@@ -1013,8 +1015,8 @@
 		qcom,mdss-dsi-h-back-porch = <8>;
 		qcom,mdss-dsi-h-pulse-width = <8>;
 		qcom,mdss-dsi-h-sync-skew = <0>;
-		qcom,mdss-dsi-v-back-porch = <2>;
-		qcom,mdss-dsi-v-front-porch = <239>;
+		qcom,mdss-dsi-v-back-porch = <4>;
+		qcom,mdss-dsi-v-front-porch = <237>;
 		qcom,mdss-dsi-v-pulse-width = <2>;
 		qcom,mdss-dsi-h-left-border = <0>;
 		qcom,mdss-dsi-h-right-border = <0>;
@@ -1330,6 +1332,8 @@
 		somc,display-clock = <17330000>;
 		somc,driver-ic-vbp = <8>;
 		somc,driver-ic-vfp = <8>;
+		somc,chenge-fps-cmds-num = <1>;
+		somc,chenge-fps-payload-num = <1>;
 
 		somc,chenge-wait-update = <0>;
 		somc,chenge-wait-on = <0 0>;
@@ -1357,8 +1361,8 @@
 		qcom,mdss-dsi-h-back-porch = <8>;
 		qcom,mdss-dsi-h-pulse-width = <8>;
 		qcom,mdss-dsi-h-sync-skew = <0>;
-		qcom,mdss-dsi-v-back-porch = <2>;
-		qcom,mdss-dsi-v-front-porch = <239>;
+		qcom,mdss-dsi-v-back-porch = <4>;
+		qcom,mdss-dsi-v-front-porch = <237>;
 		qcom,mdss-dsi-v-pulse-width = <2>;
 		qcom,mdss-dsi-h-left-border = <0>;
 		qcom,mdss-dsi-h-right-border = <0>;
@@ -1673,6 +1677,8 @@
 		somc,display-clock = <17330000>;
 		somc,driver-ic-vbp = <48>;
 		somc,driver-ic-vfp = <6>;
+		somc,chenge-fps-cmds-num = <1>;
+		somc,chenge-fps-payload-num = <1>;
 
 		somc,chenge-wait-update = <0>;
 		somc,chenge-wait-on = <0 0>;
